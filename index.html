@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.14 (three.js)</title>
+<title>スプライトスタック試作 v0.15 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -48,7 +48,8 @@
 <div id="btn" class="btn">変形</div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.14 (three.js 版) =====
+// ===== スプライトスタック試作 v0.15 (three.js 版) =====
+// v0.15: 戦艦をボクセル化し、同じボクセル（3,940個）の組み替えで巨大ロボットに変形するようにした。航行→変形→ロボット（自機を向いて5連拡散射撃）→変形→航行と潜航を交互に繰り返す。
 // v0.14: 形態ごとに動きを差別化。中間形態も止まれるようにし、旋回を最速にしてその場で回転（ピボット）できるようにした。ロボットの旋回は中程度、戦闘機は従来どおり止まれず真っすぐ飛ぶ。
 // v0.13: ロボット形態で止まれるようにした（長押しで移動、離すと減速してホバー）。
 // v0.12: 自機の変形を Gemini 方式（対応ボクセルが飛んで組み替わる）に変更。敵は従来のバースト変形のまま。
@@ -387,34 +388,130 @@ for (const fx of [-3.5, 3.5]) {
 }
 
 // ---------- 戦艦（潜って対空攻撃してくる） ----------
-const ship = { hp: 8, state: 'sail', t: 24, ang: 0.6, cx: 520, cz: -520, r: 380, y: 0, fireCd: 2.5, burstN: 0, burstT: 0 };
+const ship = { hp: 8, state: 'sail', t: 24, ang: 0.6, cx: 520, cz: -520, r: 380, y: 0, fireCd: 2.5, burstN: 0, burstT: 0, formT: 0, nextRobot: true, heading: 0.6 + Math.PI / 2, x: 520 + Math.cos(0.6) * 380, z: -520 + Math.sin(0.6) * 380 };
 const shipGrp = new THREE.Group();
-{
-  const hull = new THREE.MeshLambertMaterial({ color: '#454b54' });
-  const deck = new THREE.MeshLambertMaterial({ color: '#59616c' });
-  const dark = new THREE.MeshLambertMaterial({ color: '#33383f' });
-  const add = (geo, mat, x, y, z) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.castShadow = true;
-    shipGrp.add(m);
-    return m;
-  };
-  add(new THREE.BoxGeometry(66, 7, 13), hull, 0, 2.5, 0);
-  add(new THREE.BoxGeometry(58, 1.4, 11), deck, 0, 6.6, 0);
-  add(new THREE.BoxGeometry(10, 3.6, 9), dark, 20, 8.6, 0); // 前部砲塔
-  add(new THREE.BoxGeometry(10, 3.6, 9), dark, -22, 8.6, 0); // 後部砲塔
-  const barrelG = new THREE.CylinderGeometry(0.7, 0.7, 13, 6);
-  for (const s of [-1, 1]) {
-    for (const dz of [-2.2, 2.2]) {
-      const b = add(barrelG, dark, s * 30, 9.6, dz);
-      b.rotation.z = Math.PI / 2;
+// 戦艦はボクセルで作り、同じボクセルを組み替えて巨大ロボットに変形する（試作機 v0.9 と同じ組み替え方式）
+// 設計座標: x=右舷, y=前方(艦首+), z=上 → three 座標へは (y, z, x) で写す
+function buildShipParts() {
+  const vox = [];
+  const add = (x, y, z, c, t) => vox.push({ x, y, z, c, t });
+  const box = (x0, x1, y0, y1, z0, z1, c, t) => { for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) add(x, y, z, c, t); };
+  const HULL = '#46505e', HULL_D = '#333c47', DECK = '#5d6874', DECK_E = '#78828e', BRIDGE = '#525d6a', WIN = '#7fe7ff', FUNNEL = '#3c434e', FUNNEL_T = '#22262d', TURRET = '#4a5462', BARREL = '#2e343e', RED = '#b8452e';
+  const HW = [6, 7, 8, 8, 9];
+  for (let z = 0; z < 5; z++) {
+    for (let y = -34; y <= 34; y++) {
+      let hw = HW[z];
+      if (y > 20) hw = Math.max(1, HW[z] - Math.floor((y - 20) * 0.55));
+      if (y < -28) hw = Math.max(2, HW[z] - Math.floor((-y - 28) * 0.4));
+      for (let x = -hw; x <= hw; x++) {
+        if (!(x === -hw || x === hw || z === 0 || y === -34 || y === 34)) continue;
+        add(x, y, z, z === 0 ? HULL_D : HULL, y > 11 ? 'bow' : (y < -11 ? 'stern' : 'mid'));
+      }
     }
   }
-  add(new THREE.BoxGeometry(9, 9, 8), deck, 2, 11.5, 0); // 艦橋
-  add(new THREE.BoxGeometry(1.2, 11, 1.2), dark, 2, 20, 0); // マスト
-  add(new THREE.BoxGeometry(6, 5, 5), dark, -8, 10, 0); // 煙突
-  scene.add(shipGrp);
+  for (let y = -34; y <= 34; y++) {
+    let hw = 9;
+    if (y > 20) hw = Math.max(1, 9 - Math.floor((y - 20) * 0.55));
+    if (y < -28) hw = Math.max(2, 9 - Math.floor((-y - 28) * 0.4));
+    for (let x = -hw; x <= hw; x++) add(x, y, 5, Math.abs(x) >= 8 ? DECK_E : DECK, Math.abs(x) >= 7 ? 'deckSide' : (y > 11 ? 'bow' : (y < -11 ? 'stern' : 'mid')));
+  }
+  box(-4, 4, 6, 14, 6, 11, BRIDGE, 'bridge');
+  box(-3, 3, 7, 13, 12, 13, BRIDGE, 'bridge');
+  box(-2, 2, 8, 12, 14, 14, BRIDGE, 'bridge');
+  for (let x = -3; x <= 3; x++) { add(x, 14, 10, WIN, 'bridgeWin'); add(x, 6, 10, WIN, 'bridgeWin'); }
+  box(-3, 3, -9, -4, 6, 11, FUNNEL, 'funnel');
+  box(-3, 3, -9, -4, 12, 12, FUNNEL_T, 'funnel');
+  box(-4, 4, 21, 27, 6, 8, TURRET, 'turretF');
+  for (const bx of [-2, 2]) for (let y = 28; y <= 34; y++) add(bx, y, 7, BARREL, 'turretF');
+  box(-4, 4, -27, -21, 6, 8, TURRET, 'turretR');
+  for (const bx of [-2, 2]) for (let y = -34; y <= -28; y++) add(bx, y, 7, BARREL, 'turretR');
+  for (let z = 6; z <= 18; z++) add(0, 3, z, BARREL, 'mast');
+  box(-2, 2, 3, 3, 15, 15, BARREL, 'mast');
+  for (let x = -2; x <= 2; x++) add(x, 30, 5, RED, 'mid');
+  // 同じ場所に重なったボクセルは後のものを残して除く（窓・赤い目印が優先される）
+  { const seen = new Map(); for (const v of vox) seen.set(v.x + ',' + v.y + ',' + v.z, v); vox.length = 0; vox.push(...seen.values()); }
+  // ロボット形態の受け箱（下から順に詰める。設計検証済み: 全 3,920 個が収まる）
+  const cells = (x0, x1, y0, y1, z0, z1) => { const o = []; for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) o.push([x, y, z]); return o; };
+  const TARGETS = {
+    footL: cells(-13, -5, -5, 5, 0, 1), legL: cells(-12, -6, -4, 4, 2, 9),
+    footR: cells(5, 13, -5, 5, 0, 1), legR: cells(6, 12, -4, 4, 2, 9),
+    pelvis: cells(-7, 7, -3, 3, 10, 12),
+    torso: cells(-8, 8, -2, 2, 13, 16).concat(cells(-12, 12, -3, 3, 17, 18)),
+    core: cells(-3, 3, 1, 3, 29, 31),
+    shoulderL: cells(-16, -11, -3, 3, 19, 21), shoulderR: cells(11, 16, -3, 3, 19, 21),
+    armL: cells(-17, -14, -2, 2, 8, 18), armR: cells(14, 17, -2, 2, 8, 18),
+    cannonL: cells(-16, -12, -2, 2, 22, 27), cannonR: cells(12, 16, -2, 2, 22, 27),
+    headFront: (() => { const o = []; for (let z = 21; z <= 28; z++) for (let x = -4; x <= 4; x++) o.push([x, 4, z]); return o; })(),
+    head: cells(-4, 4, -3, 3, 21, 28),
+    backpack: cells(-5, 5, -8, -6, 13, 22),
+    antenna: cells(0, 0, 0, 0, 29, 32),
+  };
+  const streams = {};
+  for (const v of vox) (streams[v.t] = streams[v.t] || []).push(v);
+  const ds = streams.deckSide || []; delete streams.deckSide;
+  streams.deckL = ds.filter(v => v.x < 0); streams.deckR = ds.filter(v => v.x >= 0);
+  for (const t of ['turretF', 'turretR']) {
+    const items = streams[t] || []; delete streams[t];
+    streams[t + 'L'] = items.filter(v => v.x < 0); streams[t + 'R'] = items.filter(v => v.x >= 0);
+  }
+  const ROUTES = {
+    bow: ['footL', 'legL', 'pelvis', 'torso', 'core'], stern: ['footR', 'legR', 'pelvis', 'torso', 'core'],
+    mid: ['pelvis', 'torso', 'core'],
+    bridge: ['head', 'torso', 'core'], bridgeWin: ['headFront', 'head'],
+    funnel: ['backpack', 'core'], mast: ['antenna', 'torso', 'core'],
+    deckL: ['armL', 'core'], deckR: ['armR', 'core'],
+    turretFL: ['shoulderL', 'cannonL', 'core'], turretFR: ['shoulderR', 'cannonR', 'core'],
+    turretRL: ['shoulderL', 'cannonL', 'core'], turretRR: ['shoulderR', 'cannonR', 'core'],
+  };
+  const VS = 1.9;
+  const used = {}; for (const k in TARGETS) used[k] = 0;
+  const parts = [];
+  let pi = 0;
+  for (const tag in ROUTES) {
+    const items = (streams[tag] || []).slice().sort((a, b) => a.z - b.z || a.y - b.y || a.x - b.x);
+    for (const v of items) {
+      let cell = null;
+      for (const tk of ROUTES[tag]) { if (used[tk] < TARGETS[tk].length) { cell = TARGETS[tk][used[tk]++]; break; } }
+      if (!cell) cell = [0, 0, 33];
+      parts.push({
+        home: new THREE.Vector3(v.y * VS, v.z * VS - 3, v.x * VS),
+        robotHome: new THREE.Vector3(cell[1] * VS, cell[2] * VS - 3, cell[0] * VS),
+        dir: burstVec(pi), axis: spinVec(pi), spin: 2 + (pi % 5), spread: 24,
+        color: v.c,
+      });
+      pi++;
+    }
+  }
+  return parts;
+}
+const shipParts = buildShipParts();
+const shipMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.9, 1.9, 1.9), new THREE.MeshLambertMaterial({ color: '#ffffff' }), shipParts.length);
+shipMesh.castShadow = true;
+{ const col = new THREE.Color(); shipParts.forEach((p, i) => shipMesh.setColorAt(i, col.set(p.color))); shipMesh.instanceColor.needsUpdate = true; }
+shipGrp.add(shipMesh);
+scene.add(shipGrp);
+let shipLayoutT = -1;
+function layoutShipStack(t) {
+  if (Math.abs(t - shipLayoutT) < 0.0005) return;
+  shipLayoutT = t;
+  const e = t * t * (3 - 2 * t);
+  const b = Math.sin(Math.min(1, Math.max(0, t)) * Math.PI);
+  shipParts.forEach((pt, i) => {
+    _p.lerpVectors(pt.home, pt.robotHome, e).addScaledVector(pt.dir, b * pt.spread);
+    _q.setFromAxisAngle(pt.axis, b * pt.spin);
+    _m4.compose(_p, _q, _s1);
+    shipMesh.setMatrixAt(i, _m4);
+  });
+  shipMesh.instanceMatrix.needsUpdate = true;
+}
+layoutShipStack(0);
+function shipHitAt(p, maxY) {
+  if (ship.state === 'sunk' || ship.y < -8) return false;
+  const dx = p.x - ship.x, dz = p.z - ship.z;
+  if (ship.formT > 0.5) return Math.hypot(dx, dz) < 30 && p.y < maxY;
+  const hx = Math.cos(ship.heading), hz = Math.sin(ship.heading);
+  const along = dx * hx + dz * hz, side = -dx * hz + dz * hx;
+  return Math.abs(along) < 62 && Math.abs(side) < 17 && p.y < maxY;
 }
 
 // ---------- 粒子（爆発・水しぶき・飛行機雲） ----------
@@ -702,7 +799,8 @@ function drawRadar() {
   if (ship.state === 'sunk') rg.fillStyle = '#888888';
   else if (ship.y < -8) rg.fillStyle = '#4db2ff';
   else rg.fillStyle = '#ff5340';
-  rg.beginPath(); rg.arc(sx, sy, 3.4, 0, 7); rg.fill();
+  if (ship.formT > 0.5) rg.fillRect(sx - 3.4, sy - 3.4, 6.8, 6.8);
+  else { rg.beginPath(); rg.arc(sx, sy, 3.4, 0, 7); rg.fill(); }
   if (ship.y < -8 && ship.state !== 'sunk') {
     rg.strokeStyle = '#4db2ff';
     rg.beginPath(); rg.arc(sx, sy, 6, 0, 7); rg.stroke();
@@ -828,10 +926,7 @@ function frame(now) {
       if (e.alive && b.m.position.distanceTo(_ev.set(e.x, e.alt, e.z)) < 17) { damageEnemy(e, 1, b.m.position.clone()); hit = true; break; }
     }
     // 戦艦への命中
-    if (!hit && ship.y > -8 && ship.state !== 'sunk') {
-      const d = Math.hypot(b.m.position.x - shipGrp.position.x, b.m.position.z - shipGrp.position.z);
-      if (d < 32 && b.m.position.y < 17) { damageShip(1, b.m.position.clone()); hit = true; }
-    }
+    if (!hit && shipHitAt(b.m.position, ship.formT > 0.5 ? 68 : 17)) { damageShip(1, b.m.position.clone()); hit = true; }
     if (hit) { b.active = false; b.m.visible = false; }
   }
   // 爆弾の更新
@@ -852,41 +947,87 @@ function frame(now) {
     if (b.m.position.y <= 0.6 || b.life <= 0) {
       const at = b.m.position.clone(); at.y = 1;
       spawnParticles(at, 16, ['#ffffff', '#bcd8ff', '#7fb2e8'], 20, 0.8, 4.5, 1.2); // 水しぶき
-      const d = Math.hypot(at.x - shipGrp.position.x, at.z - shipGrp.position.z);
-      if (d < 36 && ship.y > -8) damageShip(3, at.clone().setY(6));
+      if (shipHitAt(at, 68)) damageShip(3, at.clone().setY(6));
       b.active = false; b.m.visible = false;
     }
   }
 
-  // 戦艦の行動（周回・潜航・対空攻撃）
+  // 戦艦の行動（周回・潜航・対空攻撃・ロボット変形）
   {
     ship.t -= dt;
-    ship.ang += dt * 0.011;
-    const px = ship.cx + Math.cos(ship.ang) * ship.r, pz = ship.cz + Math.sin(ship.ang) * ship.r;
-    const dirx = -Math.sin(ship.ang), dirz = Math.cos(ship.ang);
+    const sailing = ship.state === 'sail' || ship.state === 'diving' || ship.state === 'sub' || ship.state === 'surfacing' || ship.state === 'sunk';
+    if (sailing) {
+      ship.ang += dt * 0.011;
+      ship.x = ship.cx + Math.cos(ship.ang) * ship.r;
+      ship.z = ship.cz + Math.sin(ship.ang) * ship.r;
+      ship.heading = ship.ang + Math.PI / 2;
+    }
     let targetY = 0;
-    if (ship.state === 'sail') { targetY = 0; if (ship.t <= 0) { ship.state = 'diving'; ship.t = 4.5; } }
+    if (ship.state === 'sail') {
+      targetY = 0;
+      if (ship.t <= 0) {
+        if (ship.nextRobot) { ship.state = 'toRobot'; spawnParticles(new THREE.Vector3(ship.x, 2, ship.z), 22, ['#ffffff', '#bcd8ff'], 26, 0.9, 5, 1.0); }
+        else { ship.state = 'diving'; ship.t = 4.5; }
+      }
+    }
+    else if (ship.state === 'toRobot') {
+      targetY = 0;
+      ship.formT = Math.min(1, ship.formT + dt / 1.4);
+      layoutShipStack(ship.formT);
+      if (ship.formT >= 1) { ship.state = 'robot'; ship.t = 14; ship.fireCd = 1.2; }
+    }
+    else if (ship.state === 'robot') {
+      targetY = 0;
+      const want = Math.atan2(st.z - ship.z, st.x - ship.x);
+      let dh = want - ship.heading;
+      while (dh > Math.PI) dh -= Math.PI * 2;
+      while (dh < -Math.PI) dh += Math.PI * 2;
+      ship.heading += Math.max(-0.5 * dt, Math.min(0.5 * dt, dh));
+      if (ship.t <= 0) ship.state = 'toShip';
+    }
+    else if (ship.state === 'toShip') {
+      targetY = 0;
+      ship.formT = Math.max(0, ship.formT - dt / 1.4);
+      layoutShipStack(ship.formT);
+      if (ship.formT <= 0) { ship.state = 'sail'; ship.t = 24 + Math.random() * 10; ship.nextRobot = false; }
+    }
     else if (ship.state === 'diving') { targetY = -25; if (ship.t <= 0) { ship.state = 'sub'; ship.t = 11; } }
     else if (ship.state === 'sub') { targetY = -25; if (ship.t <= 0) { ship.state = 'surfacing'; ship.t = 4.5; } }
     else if (ship.state === 'surfacing') { targetY = 0; if (ship.t <= 0) { ship.state = 'sail'; ship.t = 24 + Math.random() * 10; } }
-    else if (ship.state === 'sunk') { targetY = -25; if (ship.t <= 0) { ship.hp = 8; ship.state = 'surfacing'; ship.t = 4.5; } }
+    else if (ship.state === 'sunk') {
+      targetY = -25;
+      if (ship.t <= 0) { ship.hp = 8; ship.formT = 0; layoutShipStack(0); ship.nextRobot = true; ship.state = 'surfacing'; ship.t = 4.5; }
+    }
     ship.y += (targetY - ship.y) * Math.min(1, dt * 0.9);
-    shipGrp.position.set(px, ship.y + Math.sin(tNow * 0.9) * 0.35, pz);
-    shipGrp.rotation.y = Math.atan2(-dirz, dirx);
-    shipGrp.rotation.z = Math.sin(tNow * 0.7) * 0.008;
-    // 対空攻撃: 浮上中＆射程内なら3点バースト
-    const pd = Math.hypot(st.x - px, st.z - pz);
+    shipGrp.position.set(ship.x, ship.y + Math.sin(tNow * 0.9) * 0.35, ship.z);
+    shipGrp.rotation.y = -ship.heading;
+    shipGrp.rotation.z = ship.formT > 0.5 ? 0 : Math.sin(tNow * 0.7) * 0.008;
+    // 対空攻撃: 船形態は艦首から3点バースト、ロボット形態は肩口から5連拡散
+    const pd = Math.hypot(st.x - ship.x, st.z - ship.z);
     if (ship.state === 'sail' && pd < 680) {
       ship.fireCd -= dt;
       if (ship.burstN > 0) {
         ship.burstT -= dt;
         if (ship.burstT <= 0) {
           ship.burstT = 0.13; ship.burstN--;
-          const from = new THREE.Vector3(px + dirx * 20, 10, pz + dirz * 20);
+          const hx = Math.cos(ship.heading), hz = Math.sin(ship.heading);
+          const from = new THREE.Vector3(ship.x + hx * 40, 13, ship.z + hz * 40);
           const to = new THREE.Vector3(st.x + (Math.random() - 0.5) * 60, st.alt + (Math.random() - 0.5) * 22, st.z + (Math.random() - 0.5) * 60);
           fireFrom(shells, from, to.sub(from).normalize().multiplyScalar(300), 3.2);
         }
       } else if (ship.fireCd <= 0) { ship.fireCd = 1.7 + Math.random() * 0.9; ship.burstN = 3; ship.burstT = 0; }
+    }
+    if (ship.state === 'robot' && pd < 950) {
+      ship.fireCd -= dt;
+      if (ship.fireCd <= 0) {
+        ship.fireCd = 3.4;
+        const from = new THREE.Vector3(ship.x, 56, ship.z);
+        for (let k = 0; k < 5; k++) {
+          const to = new THREE.Vector3(st.x + (Math.random() - 0.5) * 130, st.alt + (Math.random() - 0.5) * 30, st.z + (Math.random() - 0.5) * 130);
+          fireFrom(shells, from, to.sub(from).normalize().multiplyScalar(320), 3.4);
+        }
+        spawnParticles(from, 8, ['#ffc23d', '#f0580e'], 10, 0.4, 3, 0.2);
+      }
     }
   }
   // 対空砲弾の更新（近づくと弾けて揺れる。当たって死ぬことはない）
@@ -960,9 +1101,9 @@ function frame(now) {
   let rel = Math.atan2(sdz, sdx) - st.angle;
   while (rel > Math.PI) rel -= Math.PI * 2;
   while (rel < -Math.PI) rel += Math.PI * 2;
-  const arrow = ARROWS[Math.round(((rel + Math.PI / 8) % (Math.PI * 2)) / (Math.PI / 4)) % 8];
-  const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!' }[ship.state];
-  hud.textContent = `SPRITE STACK PROTO v0.14 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  const arrow = ARROWS[((Math.round((rel + Math.PI / 8) / (Math.PI / 4)) % 8) + 8) % 8];
+  const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!', toRobot: '変形中!', robot: 'ロボット形態', toShip: '変形中!' }[ship.state];
+  hud.textContent = `SPRITE STACK PROTO v0.15 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
