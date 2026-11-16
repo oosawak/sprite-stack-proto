@@ -49,8 +49,8 @@
 <script type="module">
 import * as THREE from 'three';
 // ===== スプライトスタック試作 v0.11 (three.js 版) =====
-// v0.11: 敵バルキリー（暗色ステルス仕様、Gemini 生成 .vox）を3機追加。追尾・変形・射撃つき。
-// v0.10: 機体を Gemini 生成のバルキリー3形態ボクセルに差し替え（戦闘機→ガウォーク→ロボットの3段変形）。
+// v0.11: 敵の変形戦闘機（暗色ステルス仕様、Gemini 生成 .vox）を3機追加。追尾・変形・射撃つき。
+// v0.10: 機体を Gemini 生成の変形戦闘機3形態ボクセルに差し替え（戦闘機→中間形態→ロボットの3段変形）。
 // v0.9: ロボットを仕様書どおり「戦闘機と同じボクセルの組み替え」に作り替え（robotVoxels）。
 // v0.8: レーダー追加（左下、機首方向が上。島は緑、戦艦は赤、潜水中は青丸）。
 // v0.7: 機体をボクセル化（平面スライスは斜めから見ると透けたため）。
@@ -62,7 +62,7 @@ const hud = document.getElementById('hud');
 addEventListener('error', () => { hud.textContent = '読み込みに失敗しました'; });
 
 // ---------- ドット絵の定義 ----------
-// ---------- バルキリー3形態のボクセルデータ（Gemini が生成した .vox から変換） ----------
+// ---------- 変形戦闘機3形態のボクセルデータ（Gemini が生成した .vox から変換） ----------
 // 元データ: gemini-valkyrie/valkyrie.py が設計した 3D ボクセルグリッド（MagicaVoxel .vox）。
 // data は [x, y, z, 色番号] の繰り返しを base64 にしたもの。vox の y が尾→機首、z が上。
 const VALK_PAL = ['#e6ebf5', '#9ba5b4', '#dc2d32', '#373c46', '#23aff0', '#a5ebff', '#ffa01e', '#fff096', '#284182'];
@@ -324,13 +324,13 @@ const stacks = [
   buildVoxelStack(buildValkStack('gerwalk')),
   buildVoxelStack(buildValkStack('robot')),
 ];
-stacks[1].grp.position.y = 1; // ガウォークの足元（home の最小 y は -14）
+stacks[1].grp.position.y = 1; // 中間形態の足元（home の最小 y は -14）
 stacks[2].grp.scale.set(0.9, 0.9, 0.9);
 stacks[2].grp.position.y = 5; // ロボットの足元（home の最小 y は -20、×0.9 で -18）
 stacks[1].grp.visible = false;
 stacks[2].grp.visible = false;
 tilt.add(stacks[0].grp, stacks[1].grp, stacks[2].grp);
-const FORM_NAMES = ['戦闘機', 'ガウォーク', 'ロボット'];
+const FORM_NAMES = ['戦闘機', '中間形態', 'ロボット'];
 const FORM_SPEED = [1, 0.78, 0.55];
 
 // 噴射炎は双発ノズル（±3.5）に合わせた2本組
@@ -456,7 +456,7 @@ function fireFrom(pool, pos, vel, life) {
 }
 
 
-// ---------- 敵バルキリー（暗色ステルス仕様、3形態） ----------
+// ---------- 敵の変形戦闘機（暗色ステルス仕様、3形態） ----------
 const enemies = [];
 const _ev = new THREE.Vector3();
 function spawnEnemy(e, initial) {
