@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.11 (three.js)</title>
+<title>スプライトスタック試作 v0.12 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -48,7 +48,8 @@
 <div id="btn" class="btn">変形</div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.11 (three.js 版) =====
+// ===== スプライトスタック試作 v0.12 (three.js 版) =====
+// v0.12: 自機の変形を Gemini 方式（対応ボクセルが飛んで組み替わる）に変更。敵は従来のバースト変形のまま。
 // v0.11: 敵の変形戦闘機（暗色ステルス仕様、Gemini 生成 .vox）を3機追加。追尾・変形・射撃つき。
 // v0.10: 機体を Gemini 生成の変形戦闘機3形態ボクセルに差し替え（戦闘機→中間形態→ロボットの3段変形）。
 // v0.9: ロボットを仕様書どおり「戦闘機と同じボクセルの組み替え」に作り替え（robotVoxels）。
@@ -330,6 +331,46 @@ stacks[2].grp.position.y = 5; // ロボットの足元（home の最小 y は -2
 stacks[1].grp.visible = false;
 stacks[2].grp.visible = false;
 tilt.add(stacks[0].grp, stacks[1].grp, stacks[2].grp);
+
+// ---------- 自機の変形は Gemini 方式（対応ボクセルが飛んで組み替わる） ----------
+// 元は Voxel Valkyrie の updateMorphingUnit と同じ考え方:
+// 形態Aと形態Bのボクセルを番号順に対応付け、位置を直線補間する。
+// 個数が違う分は、相手側のボクセルを周回参照し、余りは小さく生えて／縮んで消える。
+const MORPH_MAX = Math.max(...stacks.map(s => s.parts.length));
+const morphMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ color: '#ffffff' }), MORPH_MAX);
+morphMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+morphMesh.castShadow = true;
+morphMesh.visible = false;
+tilt.add(morphMesh);
+let morphFrom = null, morphTo = null;
+function bakedParts(stack) {
+  const s = stack.grp.scale.x, o = stack.grp.position;
+  return stack.parts.map(p => ({
+    pos: new THREE.Vector3(p.home.x * s + o.x, p.home.y * s + o.y, p.home.z * s + o.z),
+    color: p.color,
+  }));
+}
+const _sv = new THREE.Vector3();
+const _sZero = new THREE.Vector3(0, 0, 0);
+const _org = new THREE.Vector3();
+const _mc = new THREE.Color();
+function updateMorphMesh(te) {
+  const A = morphFrom, B = morphTo;
+  const count = Math.max(A.length, B.length);
+  for (let i = 0; i < MORPH_MAX; i++) {
+    if (i >= count) { _q.identity(); _m4.compose(_org, _q, _sZero); morphMesh.setMatrixAt(i, _m4); continue; }
+    const a = A[i % A.length], b = B[i % B.length];
+    const scA = i < A.length ? 1 : 0.01, scB = i < B.length ? 1 : 0.01;
+    const sc = scA + (scB - scA) * te;
+    _p.copy(a.pos).lerp(b.pos, te);
+    _q.identity();
+    _m4.compose(_p, _q, _sv.set(sc, sc, sc));
+    morphMesh.setMatrixAt(i, _m4);
+    morphMesh.setColorAt(i, _mc.set(te < 0.5 ? a.color : b.color));
+  }
+  morphMesh.instanceMatrix.needsUpdate = true;
+  if (morphMesh.instanceColor) morphMesh.instanceColor.needsUpdate = true;
+}
 const FORM_NAMES = ['戦闘機', '中間形態', 'ロボット'];
 const FORM_SPEED = [1, 0.78, 0.55];
 
@@ -589,7 +630,15 @@ bindBtn('btn3', () => { st.view = 1 - st.view; });
 bindBtn('btn4', null, true);
 bindBtn('btn5', dropBomb);
 bindBtn('btn6', () => { st.nightTarget = 1 - st.nightTarget; });
-function startMorph() { if (st.morph < 0) { st.morph = 0; st.swapped = false; st.formTo = (st.form + 1) % 3; } }
+function startMorph() {
+  if (st.morph >= 0) return;
+  st.morph = 0; st.swapped = false; st.formTo = (st.form + 1) % 3;
+  morphFrom = bakedParts(stacks[st.form]);
+  morphTo = bakedParts(stacks[st.formTo]);
+  stacks.forEach(s => s.grp.visible = false);
+  morphMesh.visible = true;
+  updateMorphMesh(0);
+}
 function startRoll() { if (st.roll < 0 && st.morph < 0 && st.form === 0) st.roll = 0; }
 const _fwd = new THREE.Vector3(), _sp = new THREE.Vector3();
 function craftForward() { return _fwd.set(Math.cos(st.angle), 0, Math.sin(st.angle)); }
@@ -688,20 +737,18 @@ function frame(now) {
   st.z += Math.sin(st.angle) * speed * dt;
   const fwd = craftForward().clone();
 
-  // 変形
+  // 変形（自機は Gemini 方式: 対応するボクセル同士が直線で飛んで組み替わる）
   if (st.morph >= 0) {
     st.morph += dt / 0.9;
-    if (st.morph >= 0.5 && !st.swapped) {
-      st.swapped = true;
-      st.form = st.formTo;
+    const mt = Math.min(1, st.morph);
+    updateMorphMesh(mt * mt * (3 - 2 * mt));
+    if (st.morph >= 0.5 && !st.swapped) { st.swapped = true; st.form = st.formTo; }
+    if (st.morph >= 1) {
+      st.morph = -1; st.swapped = false;
+      morphMesh.visible = false;
       stacks.forEach((s, i) => s.grp.visible = i === st.form);
     }
-    if (st.morph >= 1) { st.morph = -1; st.swapped = false; }
   }
-  const burst = st.morph >= 0 ? Math.sin(Math.min(1, st.morph) * Math.PI) : 0;
-  layoutStack(stacks[0], burst);
-  layoutStack(stacks[1], burst);
-  layoutStack(stacks[2], burst);
 
   // ロール
   if (st.roll >= 0) { st.roll += dt / 0.8; if (st.roll >= 1) st.roll = -1; }
@@ -906,7 +953,7 @@ function frame(now) {
   while (rel < -Math.PI) rel += Math.PI * 2;
   const arrow = ARROWS[Math.round(((rel + Math.PI / 8) % (Math.PI * 2)) / (Math.PI / 4)) % 8];
   const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!' }[ship.state];
-  hud.textContent = `SPRITE STACK PROTO v0.11 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  hud.textContent = `SPRITE STACK PROTO v0.12 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
