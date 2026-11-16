@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.8 (three.js)</title>
+<title>スプライトスタック試作 v0.9 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -48,7 +48,8 @@
 <div id="btn" class="btn">変形</div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.8 (three.js 版) =====
+// ===== スプライトスタック試作 v0.9 (three.js 版) =====
+// v0.9: ロボットを仕様書どおり「戦闘機と同じボクセルの組み替え」に作り替え（robotVoxels）。
 // v0.8: レーダー追加（左下、機首方向が上。島は緑、戦艦は赤、潜水中は青丸）。
 // v0.7: 機体をボクセル化（平面スライスは斜めから見ると透けたため）。
 //   実シャドウ（丸い影を廃止）、Zで弾・Xで爆弾、地形バリエーション、雲の増量、
@@ -106,29 +107,6 @@ function jetClass(x, y, ch) {
   if (Math.abs(x - 15.5) <= 5.5) return 'b';
   return 'w';
 }
-const ROBOT = [
-".........YY.........",
-".........YY.........",
-".......WWWWWW.......",
-".......WCCCCW.......",
-".......WWWWWW.......",
-"........WWWW........",
-".....RRRRRRRRRR.....",
-"...RR.RRRRRRRR.RR...",
-"...RR.RRYYYYRR.RR...",
-"...RR.RRRRRRRR.RR...",
-"...RR.RRRRRRRR.RR...",
-"...DD.RRRRRRRR.DD...",
-"...DD..RRRRRR..DD...",
-".......RRRRRR.......",
-".......RRR.RRR......",
-".......RRR.RRR......",
-".......RRR.RRR......",
-"......RRRR.RRRR.....",
-"......DDDD.DDDD.....",
-];
-const ROBOT_PAL = { R:'#d8402e', W:'#e8e4da', D:'#33383f', Y:'#f2b01e', C:'#2e9ec9' };
-const DCLASS = { Y: [7, 9], W: [5, 11], C: [11, 13], R: [4, 11], D: [4, 10] };
 const LAYERS = 16;
 function shade(hex, f) {
   const n = parseInt(hex.slice(1), 16);
@@ -196,19 +174,46 @@ function jetVoxels() {
   return parts;
 }
 function robotVoxels() {
+  // 本人の変形プロセス仕様書どおり: ロボットは専用の絵ではなく、
+  // 戦闘機と「まったく同じボクセル」（同じドット絵・同じ高さクラス）を組み替えて作る。
+  // 対応付け（層 = 戦闘機での高さスライス番号）:
+  //   層13-15（双尾翼フィンの先）→ 脚（2本に分かれた形がそのまま脚になる）
+  //   層3（胴体の芯）→ 腰
+  //   層7-10（胴体）→ 胴体（キャノピーの根元は胸の窓、噴射口は背中の下）
+  //   層4-6（翼の層）→ 腕（翼の外側が両腕、内側は肩と胸）
+  //   層11-12（キャノピーと尾翼の付け根）→ 頭（青いキャノピーが顔、尾翼が頭の後ろ）
+  // 使うボクセルの集合は戦闘機と完全に同一で、位置だけが変わる。
   const parts = [];
   let n = 0;
   for (let i = 0; i < LAYERS; i++) {
-    for (let y = 0; y < 19; y++) for (let x = 0; x < 20; x++) {
-      const ch = ROBOT[y].padEnd(20, '.')[x];
-      const pal = ROBOT_PAL[ch];
-      if (!pal) continue;
-      const [b, t] = DCLASS[ch];
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      const ch = JET[y][x];
+      if (ch === '.') continue;
+      const cls = jetClass(x, y, ch);
+      const [b, t] = HCLASS[cls];
       if (i < b || i > t) continue;
+      const cx = x - 15.5, fwd = y - 15.5;
+      let home;
+      if (i >= 13) { // 脚
+        home = new THREE.Vector3(cx * 1.15, -13.0 + (i - 13) * 0.95 + (27 - y) * 0.38, (y - 23.5) * 0.22);
+      } else if (i === 3) { // 腰
+        home = new THREE.Vector3(cx * 0.6, -8.8, fwd * 0.42);
+      } else if (i >= 7 && i <= 10) { // 胴体
+        home = new THREE.Vector3(cx * 0.58, -6.8 + (i - 7) * 1.3, fwd * 0.42);
+      } else if (i >= 4 && i <= 6) { // 腕（外側）と肩（内側）
+        if (Math.abs(cx) <= 6.5) home = new THREE.Vector3(cx * 0.58, 0.2 + (i - 4) * 0.45, fwd * 0.42);
+        else home = new THREE.Vector3(
+          Math.sign(cx) * (6.6 + (Math.abs(cx) - 6.5) * 0.5),
+          0.2 - (y - 12) * 0.62 - (i - 4) * 0.35,
+          (i - 5) * 0.85 + (y - 15) * 0.1
+        );
+      } else { // 層11-12: 頭
+        home = new THREE.Vector3(cx * 0.82, 2.2 + (i - 11) * 0.8, fwd * 0.28);
+      }
       parts.push({
-        home: new THREE.Vector3(x - 9.5, 18 - y, -(i - 7.5)),
-        dir: burstVec(n + 40), axis: spinVec(n + 40), spin: 2 + (n % 5),
-        spread: 8 + (n % 5), color: shade(pal, 0.82 + 0.18 * (i / (LAYERS - 1))),
+        home,
+        dir: burstVec(n), axis: spinVec(n), spin: 2 + (n % 5),
+        spread: 13 + (n % 7), color: shade(JET_PAL[ch], 0.72 + 0.28 * (i / (LAYERS - 1))),
       });
       n++;
     }
@@ -397,8 +402,8 @@ scene.add(craft);
 const jetVox = buildVoxelStack(jetVoxels());
 jetVox.grp.position.y = -6;
 const robotVox = buildVoxelStack(robotVoxels());
-robotVox.grp.scale.set(1.7, 1.7, 0.9);
-robotVox.grp.position.y = -14.5;
+robotVox.grp.scale.set(1.5, 1.5, 1.1);
+robotVox.grp.position.y = 7.5; // 組み替えロボットの足元（home の最小 y は -13.0、×1.5 で -19.5）
 robotVox.grp.visible = false;
 tilt.add(jetVox.grp, robotVox.grp);
 
@@ -677,7 +682,7 @@ function frame(now) {
   tilt.rotation.z = st.bank * 0.55 + rollA;
   tilt.rotation.x += (((st.form === 0) ? (boosting ? -0.15 : -0.07) : 0) - tilt.rotation.x) * Math.min(1, dt * 5);
   if (st.form === 1) {
-    robotVox.grp.position.y = -14.5 + Math.abs(Math.sin(tNow * 9)) * 0.9;
+    robotVox.grp.position.y = 7.5 + Math.abs(Math.sin(tNow * 9)) * 0.9;
     robotVox.grp.rotation.z = Math.sin(tNow * 9) * 0.03;
   }
   const fl = st.form === 0 && st.morph < 0;
@@ -852,7 +857,7 @@ function frame(now) {
   while (rel < -Math.PI) rel += Math.PI * 2;
   const arrow = ARROWS[Math.round(((rel + Math.PI / 8) % (Math.PI * 2)) / (Math.PI / 4)) % 8];
   const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!' }[ship.state];
-  hud.textContent = `SPRITE STACK PROTO v0.8 (three.js)\nFORM: ${st.form === 0 ? '戦闘機' : 'ロボット'}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m`;
+  hud.textContent = `SPRITE STACK PROTO v0.9 (three.js)\nFORM: ${st.form === 0 ? '戦闘機' : 'ロボット'}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
