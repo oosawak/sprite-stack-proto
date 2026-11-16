@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.7 (three.js)</title>
+<title>スプライトスタック試作 v0.8 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -27,6 +27,10 @@
   #btn4 { right: 12px; bottom: 92px; background: #3366cc; }
   #btn5 { right: 118px; bottom: 92px; background: #a83a32; }
   #btn6 { right: 224px; bottom: 92px; background: #2c3e70; }
+  #radar {
+    position: fixed; left: 10px; bottom: 34px; width: 118px; height: 118px;
+    border-radius: 50%; border: 2px solid rgba(140,255,180,0.5); pointer-events: none;
+  }
 </style>
 <script type="importmap">
 { "imports": { "three": "./three.module.js" } }
@@ -34,6 +38,7 @@
 </head>
 <body>
 <div id="hud"></div>
+<canvas id="radar" width="132" height="132"></canvas>
 <div id="help">MOVE: STEER ・ HOLD: BOOST ・ TAP / T: 変形 ・ R: ROLL ・ V: VIEW ・ Z: SHOT ・ X: BOMB ・ N: NIGHT</div>
 <div id="btn6" class="btn">夜</div>
 <div id="btn5" class="btn">爆弾</div>
@@ -43,7 +48,8 @@
 <div id="btn" class="btn">変形</div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.7 (three.js 版) =====
+// ===== スプライトスタック試作 v0.8 (three.js 版) =====
+// v0.8: レーダー追加（左下、機首方向が上。島は緑、戦艦は赤、潜水中は青丸）。
 // v0.7: 機体をボクセル化（平面スライスは斜めから見ると透けたため）。
 //   実シャドウ（丸い影を廃止）、Zで弾・Xで爆弾、地形バリエーション、雲の増量、
 //   前傾姿勢、翼端の飛行機雲、夜モード、潜って対空攻撃してくる戦艦。
@@ -265,6 +271,7 @@ let seaMat;
 }
 // 島（地形バリエーション: 草原・岩山・砂浜・森・雪山・火山）
 const clouds = [];
+const islandPts = [];
 let cloudMat;
 {
   const rnd = rng(1234);
@@ -327,6 +334,7 @@ let cloudMat;
     if (rnd() < 0.3) isl.scale.x = 1.4 + rnd() * 0.9; // 細長い島も
     const a = rnd() * Math.PI * 2, d = 120 + rnd() * 2400;
     isl.position.set(Math.cos(a) * d, 0, Math.sin(a) * d);
+    islandPts.push({ x: isl.position.x, z: isl.position.z });
     scene.add(isl);
   }
   // 雲（増量、当たり判定なし）
@@ -576,6 +584,46 @@ function damageShip(n, at) {
   }
 }
 
+// ---------- レーダー（左下、機首方向が上） ----------
+const rg = document.getElementById('radar').getContext('2d');
+function drawRadar() {
+  const S = 132, C = S / 2, R = C - 4, RANGE = 1300, sc = R / RANGE;
+  rg.clearRect(0, 0, S, S);
+  rg.fillStyle = 'rgba(8,30,22,0.78)';
+  rg.beginPath(); rg.arc(C, C, R, 0, 7); rg.fill();
+  rg.strokeStyle = 'rgba(120,255,170,0.35)'; rg.lineWidth = 1;
+  for (const f of [0.33, 0.66, 1]) { rg.beginPath(); rg.arc(C, C, R * f, 0, 7); rg.stroke(); }
+  rg.beginPath();
+  rg.moveTo(C - R, C); rg.lineTo(C + R, C);
+  rg.moveTo(C, C - R); rg.lineTo(C, C + R);
+  rg.stroke();
+  const sw = (tNow * 0.9) % (Math.PI * 2); // スイープ
+  rg.strokeStyle = 'rgba(140,255,180,0.75)';
+  rg.beginPath(); rg.moveTo(C, C); rg.lineTo(C + Math.sin(sw) * R, C - Math.cos(sw) * R); rg.stroke();
+  const plot = (wx, wz) => {
+    const dx = wx - st.x, dz = wz - st.z;
+    const f = dx * Math.cos(st.angle) + dz * Math.sin(st.angle);
+    const r = -dx * Math.sin(st.angle) + dz * Math.cos(st.angle); // 右舷方向（符号を間違えると左右が鏡になる）
+    let x = r * sc, y = -f * sc;
+    const d = Math.hypot(x, y);
+    if (d > R - 3) { x *= (R - 3) / d; y *= (R - 3) / d; }
+    return [C + x, C + y];
+  };
+  rg.fillStyle = 'rgba(150,220,160,0.55)';
+  for (const p of islandPts) { const [x, y] = plot(p.x, p.z); rg.fillRect(x - 1.5, y - 1.5, 3, 3); }
+  const [sx, sy] = plot(shipGrp.position.x, shipGrp.position.z);
+  if (ship.state === 'sunk') rg.fillStyle = '#888888';
+  else if (ship.y < -8) rg.fillStyle = '#4db2ff';
+  else rg.fillStyle = '#ff5340';
+  rg.beginPath(); rg.arc(sx, sy, 3.4, 0, 7); rg.fill();
+  if (ship.y < -8 && ship.state !== 'sunk') {
+    rg.strokeStyle = '#4db2ff';
+    rg.beginPath(); rg.arc(sx, sy, 6, 0, 7); rg.stroke();
+  }
+  rg.fillStyle = '#ffffff';
+  rg.beginPath(); rg.moveTo(C, C - 6); rg.lineTo(C - 4.4, C + 5); rg.lineTo(C + 4.4, C + 5); rg.closePath(); rg.fill();
+}
+
 // ---------- 毎フレーム ----------
 let tNow = 0, last = performance.now();
 const camPos = new THREE.Vector3(0, 30, 60);
@@ -804,7 +852,8 @@ function frame(now) {
   while (rel < -Math.PI) rel += Math.PI * 2;
   const arrow = ARROWS[Math.round(((rel + Math.PI / 8) % (Math.PI * 2)) / (Math.PI / 4)) % 8];
   const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!' }[ship.state];
-  hud.textContent = `SPRITE STACK PROTO v0.7 (three.js)\nFORM: ${st.form === 0 ? '戦闘機' : 'ロボット'}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m`;
+  hud.textContent = `SPRITE STACK PROTO v0.8 (three.js)\nFORM: ${st.form === 0 ? '戦闘機' : 'ロボット'}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m`;
+  drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
