@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>スプライトスタック試作 v0.7 (three.js)</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
+  #hud {
+    position: fixed; left: 10px; top: 8px; color: #eaf2ff;
+    font: 12px/1.5 monospace; text-shadow: 1px 1px 0 #0008; pointer-events: none;
+    white-space: pre;
+  }
+  #help {
+    position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
+    color: #eaf2ff; font: 11px monospace; text-shadow: 1px 1px 0 #0008; pointer-events: none;
+  }
+  .btn {
+    position: fixed; padding: 10px 14px;
+    font: 14px monospace; color: #fff; border: 2px solid #fff6;
+    border-radius: 8px; user-select: none; -webkit-user-select: none;
+  }
+  #btn { right: 12px; bottom: 36px; background: #f0580e; }
+  #btn2 { right: 118px; bottom: 36px; background: #2e6da8; }
+  #btn3 { right: 224px; bottom: 36px; background: #4a7c59; }
+  #btn4 { right: 12px; bottom: 92px; background: #3366cc; }
+  #btn5 { right: 118px; bottom: 92px; background: #a83a32; }
+  #btn6 { right: 224px; bottom: 92px; background: #2c3e70; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./three.module.js" } }
+</script>
+</head>
+<body>
+<div id="hud"></div>
+<div id="help">MOVE: STEER ・ HOLD: BOOST ・ TAP / T: 変形 ・ R: ROLL ・ V: VIEW ・ Z: SHOT ・ X: BOMB ・ N: NIGHT</div>
+<div id="btn6" class="btn">夜</div>
+<div id="btn5" class="btn">爆弾</div>
+<div id="btn4" class="btn">弾</div>
+<div id="btn3" class="btn">視点</div>
+<div id="btn2" class="btn">ロール</div>
+<div id="btn" class="btn">変形</div>
+<script type="module">
+import * as THREE from 'three';
+// ===== スプライトスタック試作 v0.7 (three.js 版) =====
+// v0.7: 機体をボクセル化（平面スライスは斜めから見ると透けたため）。
+//   実シャドウ（丸い影を廃止）、Zで弾・Xで爆弾、地形バリエーション、雲の増量、
+//   前傾姿勢、翼端の飛行機雲、夜モード、潜って対空攻撃してくる戦艦。
+//   three.js は同梱（three.module.js）。
+
+const hud = document.getElementById('hud');
+addEventListener('error', () => { hud.textContent = '読み込みに失敗しました'; });
+
+// ---------- ドット絵の定義 ----------
+const JET = [
+"...............WW...............",
+"...............WW...............",
+"..............WWWW..............",
+"..............WWWW..............",
+".............WWWWWW.............",
+".............WBBBBW.............",
+".............WBBBBW.............",
+".............WWWWWW.............",
+"............WWWWWWWW............",
+"............WWWWWWWW............",
+"...........WWWWWWWWWW...........",
+"...........WWWWWWWWWW...........",
+".......RRWWWWWWWWWWWWWWRR.......",
+"......RRRWWWWWWWWWWWWWWRRR......",
+".....RRRRWWWWWWWWWWWWWWRRRR.....",
+"....RRRRRWWWWWWWWWWWWWWRRRRR....",
+"....RRRRWWWWWWWWWWWWWWWWRRRR....",
+".....RRRWWWWWWWWWWWWWWWWRRR.....",
+"......RRWWWWWWWWWWWWWWWWRR......",
+".........WWWWWWWWWWWWWW.........",
+".........DDFFWWWWWWFFDD.........",
+".........DDFFWWWWWWFFDD.........",
+".........DDFFWWWWWWFFDD.........",
+".........DDFFWWWWWWFFDD.........",
+"..........DDFFWWWWFFDD..........",
+"..........DDFFWWWWFFDD..........",
+"...........DFFWWWWFFD...........",
+"...........DFFWWWWFFD...........",
+"............DDRRRRDD............",
+"..............DOOD..............",
+"..............DOOD..............",
+"................................",
+];
+const JET_PAL = { W:'#e8e9ec', R:'#d8402e', B:'#2e9ec9', D:'#3a3f4d', F:'#d8402e', O:'#f0580e' };
+const HCLASS = { w: [4, 6], b: [3, 9], u: [3, 10], c: [8, 12], t: [5, 15], e: [3, 7], n: [3, 8] };
+function jetClass(x, y, ch) {
+  if (ch === 'B') return 'c';
+  if (ch === 'F') return 't';
+  if (ch === 'O') return 'e';
+  if (ch === 'D') return 'b';
+  if (ch === 'R') return 'w';
+  if (y <= 1) return 'n';
+  if (Math.abs(x - 15.5) <= 3.5) return 'u';
+  if (Math.abs(x - 15.5) <= 5.5) return 'b';
+  return 'w';
+}
+const ROBOT = [
+".........YY.........",
+".........YY.........",
+".......WWWWWW.......",
+".......WCCCCW.......",
+".......WWWWWW.......",
+"........WWWW........",
+".....RRRRRRRRRR.....",
+"...RR.RRRRRRRR.RR...",
+"...RR.RRYYYYRR.RR...",
+"...RR.RRRRRRRR.RR...",
+"...RR.RRRRRRRR.RR...",
+"...DD.RRRRRRRR.DD...",
+"...DD..RRRRRR..DD...",
+".......RRRRRR.......",
+".......RRR.RRR......",
+".......RRR.RRR......",
+".......RRR.RRR......",
+"......RRRR.RRRR.....",
+"......DDDD.DDDD.....",
+];
+const ROBOT_PAL = { R:'#d8402e', W:'#e8e4da', D:'#33383f', Y:'#f2b01e', C:'#2e9ec9' };
+const DCLASS = { Y: [7, 9], W: [5, 11], C: [11, 13], R: [4, 11], D: [4, 10] };
+const LAYERS = 16;
+function shade(hex, f) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, ((n >> 16) & 255) * f) | 0;
+  const g = Math.min(255, ((n >> 8) & 255) * f) | 0;
+  const b = Math.min(255, (n & 255) * f) | 0;
+  return `rgb(${r},${g},${b})`;
+}
+// 決定的乱数
+function rng(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+
+// ---------- ボクセル機体の組み立て ----------
+// parts: {home, dir(バラけ方向), axis(回転軸), spin, color}
+function buildVoxelStack(parts) {
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const mat = new THREE.MeshLambertMaterial({ color: '#ffffff' });
+  const mesh = new THREE.InstancedMesh(geo, mat, parts.length);
+  mesh.castShadow = true;
+  const col = new THREE.Color();
+  parts.forEach((p, i) => { mesh.setColorAt(i, col.set(p.color)); });
+  mesh.instanceColor.needsUpdate = true;
+  const grp = new THREE.Group();
+  grp.add(mesh);
+  const vs = { grp, mesh, parts, lastBurst: -1 };
+  layoutStack(vs, 0);
+  return vs;
+}
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s1 = new THREE.Vector3(1, 1, 1), _p = new THREE.Vector3();
+function layoutStack(vs, burst) {
+  if (Math.abs(burst - vs.lastBurst) < 0.001 && burst !== 0) return;
+  vs.parts.forEach((pt, idx) => {
+    _p.copy(pt.home).addScaledVector(pt.dir, burst * pt.spread);
+    _q.setFromAxisAngle(pt.axis, burst * pt.spin);
+    _m4.compose(_p, _q, _s1);
+    vs.mesh.setMatrixAt(idx, _m4);
+  });
+  vs.mesh.instanceMatrix.needsUpdate = true;
+  vs.lastBurst = burst;
+}
+function burstVec(i) {
+  const a = i * 2.39996;
+  return new THREE.Vector3(Math.cos(a), (Math.sin(i * 12.9898) * 0.5), Math.sin(a)).normalize();
+}
+function spinVec(i) {
+  const v = new THREE.Vector3(Math.sin(i * 78.233), Math.sin(i * 12.9898), Math.sin(i * 37.719));
+  return v.normalize();
+}
+function jetVoxels() {
+  const parts = [];
+  let n = 0;
+  for (let i = 0; i < LAYERS; i++) {
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      const ch = JET[y][x];
+      if (ch === '.') continue;
+      const [b, t] = HCLASS[jetClass(x, y, ch)];
+      if (i < b || i > t) continue;
+      parts.push({
+        home: new THREE.Vector3(x - 15.5, i * 0.8, y - 15.5),
+        dir: burstVec(n), axis: spinVec(n), spin: 2 + (n % 5),
+        spread: 13 + (n % 7), color: shade(JET_PAL[ch], 0.72 + 0.28 * (i / (LAYERS - 1))),
+      });
+      n++;
+    }
+  }
+  return parts;
+}
+function robotVoxels() {
+  const parts = [];
+  let n = 0;
+  for (let i = 0; i < LAYERS; i++) {
+    for (let y = 0; y < 19; y++) for (let x = 0; x < 20; x++) {
+      const ch = ROBOT[y].padEnd(20, '.')[x];
+      const pal = ROBOT_PAL[ch];
+      if (!pal) continue;
+      const [b, t] = DCLASS[ch];
+      if (i < b || i > t) continue;
+      parts.push({
+        home: new THREE.Vector3(x - 9.5, 18 - y, -(i - 7.5)),
+        dir: burstVec(n + 40), axis: spinVec(n + 40), spin: 2 + (n % 5),
+        spread: 8 + (n % 5), color: shade(pal, 0.82 + 0.18 * (i / (LAYERS - 1))),
+      });
+      n++;
+    }
+  }
+  return parts;
+}
+
+// ---------- three.js の場面 ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(1);
+renderer.setSize(Math.ceil(innerWidth / 3), Math.ceil(innerHeight / 3), false);
+renderer.domElement.style.width = '100vw';
+renderer.domElement.style.height = '100vh';
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.BasicShadowMap; // ドット絵に合うくっきりした影
+document.body.appendChild(renderer.domElement);
+const cv = renderer.domElement;
+
+const scene = new THREE.Scene();
+const DAY = { bg: new THREE.Color('#2b7cd3'), sea: new THREE.Color('#ffffff'), hemi: 1.0, sun: 1.15, sunCol: new THREE.Color('#fff2d8'), cloud: new THREE.Color('#ffffff'), fogNear: 220, fogFar: 900 };
+const NIGHT = { bg: new THREE.Color('#0b1e3a'), sea: new THREE.Color('#54678f'), hemi: 0.32, sun: 0.22, sunCol: new THREE.Color('#9db8ff'), cloud: new THREE.Color('#7787a8'), fogNear: 170, fogFar: 720 };
+scene.background = new THREE.Color().copy(DAY.bg);
+scene.fog = new THREE.Fog(DAY.bg.getHex(), DAY.fogNear, DAY.fogFar);
+const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 4000);
+addEventListener('resize', () => {
+  renderer.setSize(Math.ceil(innerWidth / 3), Math.ceil(innerHeight / 3), false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+const hemi = new THREE.HemisphereLight(0xffffff, 0x33507a, DAY.hemi);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(DAY.sunCol.getHex(), DAY.sun);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -110; sun.shadow.camera.right = 110;
+sun.shadow.camera.top = 110; sun.shadow.camera.bottom = -110;
+sun.shadow.camera.near = 10; sun.shadow.camera.far = 320;
+scene.add(sun, sun.target);
+
+// 海（模様つき、影を受ける）
+let seaMat;
+{
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#2b7cd3'; g.fillRect(0, 0, 256, 256);
+  const rnd = rng(7);
+  g.fillStyle = '#1f63ad';
+  for (let i = 0; i < 700; i++) g.fillRect((rnd() * 256) | 0, (rnd() * 256) | 0, 3, 2);
+  g.fillStyle = '#3b8ede';
+  for (let i = 0; i < 420; i++) g.fillRect((rnd() * 256) | 0, (rnd() * 256) | 0, 2, 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(90, 90);
+  tex.magFilter = THREE.NearestFilter;
+  seaMat = new THREE.MeshLambertMaterial({ map: tex });
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), seaMat);
+  sea.rotation.x = -Math.PI / 2;
+  sea.receiveShadow = true;
+  scene.add(sea);
+}
+// 島（地形バリエーション: 草原・岩山・砂浜・森・雪山・火山）
+const clouds = [];
+let cloudMat;
+{
+  const rnd = rng(1234);
+  const M = {
+    sand: new THREE.MeshLambertMaterial({ color: '#e8d189' }),
+    sand2: new THREE.MeshLambertMaterial({ color: '#dcc078' }),
+    grass: new THREE.MeshLambertMaterial({ color: '#57a047' }),
+    grass2: new THREE.MeshLambertMaterial({ color: '#3f8438' }),
+    rock: new THREE.MeshLambertMaterial({ color: '#7d7f72' }),
+    rock2: new THREE.MeshLambertMaterial({ color: '#5f6157' }),
+    snow: new THREE.MeshLambertMaterial({ color: '#eef2f5' }),
+    dark: new THREE.MeshLambertMaterial({ color: '#4c443c' }),
+    lava: new THREE.MeshBasicMaterial({ color: '#f0580e' }),
+    trunk: new THREE.MeshLambertMaterial({ color: '#6b4a2f' }),
+    leaf: new THREE.MeshLambertMaterial({ color: '#2e7d32' }),
+    leaf2: new THREE.MeshLambertMaterial({ color: '#43a047' }),
+  };
+  const tier = (isl, r, h, mat, y) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.05, h, 18), mat);
+    m.position.y = y;
+    m.castShadow = m.receiveShadow = true;
+    isl.add(m);
+  };
+  const tree = (isl, x, z, y, s) => {
+    const t = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.4, 3.4, 1.4), M.trunk);
+    trunk.position.y = 1.7;
+    const fol = new THREE.Mesh(new THREE.ConeGeometry(3.6, 7.5, 6), rnd() < 0.5 ? M.leaf : M.leaf2);
+    fol.position.y = 6.8;
+    fol.castShadow = true;
+    t.add(trunk, fol);
+    t.position.set(x, y, z);
+    t.scale.setScalar(s);
+    isl.add(t);
+  };
+  for (let i = 0; i < 110; i++) {
+    const isl = new THREE.Group();
+    const r = 14 + rnd() * 30;
+    const kind = rnd();
+    if (kind < 0.34) { // 草原
+      tier(isl, r, 2.2, M.sand, 1.1); tier(isl, r * 0.8, 2.6, M.grass, 3.4); tier(isl, r * 0.5, 2.6, M.grass2, 5.9);
+      if (rnd() < 0.4) tree(isl, (rnd() - 0.5) * r * 0.5, (rnd() - 0.5) * r * 0.5, 7.2, 0.9 + rnd() * 0.5);
+    } else if (kind < 0.52) { // 岩山
+      tier(isl, r, 2.4, M.rock, 1.2); tier(isl, r * 0.78, 3.4, M.rock2, 3.9); tier(isl, r * 0.52, 3.6, M.rock, 7.3); tier(isl, r * 0.28, 3.4, M.rock2, 10.6);
+    } else if (kind < 0.66) { // 砂浜の環礁
+      tier(isl, r * 1.15, 1.6, M.sand, 0.8); tier(isl, r * 0.7, 1.6, M.sand2, 2.2);
+      if (rnd() < 0.5) tree(isl, (rnd() - 0.5) * r * 0.6, (rnd() - 0.5) * r * 0.6, 3.0, 1 + rnd() * 0.6);
+    } else if (kind < 0.82) { // 森の島
+      tier(isl, r, 2.2, M.sand, 1.1); tier(isl, r * 0.82, 2.8, M.grass, 3.5); tier(isl, r * 0.55, 2.6, M.grass2, 6.1);
+      const nt = 3 + (rnd() * 4 | 0);
+      for (let j = 0; j < nt; j++) tree(isl, (rnd() - 0.5) * r * 0.7, (rnd() - 0.5) * r * 0.7, 7.4, 0.8 + rnd() * 0.7);
+    } else if (kind < 0.93) { // 雪山
+      tier(isl, r, 2.4, M.rock, 1.2); tier(isl, r * 0.76, 3.4, M.rock2, 3.9); tier(isl, r * 0.5, 3.4, M.rock, 7.2); tier(isl, r * 0.26, 3.0, M.snow, 10.2);
+    } else { // 火山
+      tier(isl, r, 2.4, M.dark, 1.2); tier(isl, r * 0.74, 3.6, M.dark, 4.1); tier(isl, r * 0.44, 3.4, M.rock2, 7.4);
+      const crater = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.2, r * 0.24, 1.2, 12), M.lava);
+      crater.position.y = 9.4;
+      isl.add(crater);
+    }
+    if (rnd() < 0.3) isl.scale.x = 1.4 + rnd() * 0.9; // 細長い島も
+    const a = rnd() * Math.PI * 2, d = 120 + rnd() * 2400;
+    isl.position.set(Math.cos(a) * d, 0, Math.sin(a) * d);
+    scene.add(isl);
+  }
+  // 雲（増量、当たり判定なし）
+  cloudMat = new THREE.MeshLambertMaterial({ color: '#ffffff' });
+  const rndC = rng(99);
+  for (let i = 0; i < 26; i++) {
+    const cl = new THREE.Group();
+    const n = 4 + (rndC() * 4 | 0);
+    for (let j = 0; j < n; j++) {
+      const s = 9 + rndC() * 16;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.3, s * 0.62), cloudMat);
+      m.position.set((rndC() - 0.5) * 30, (rndC() - 0.5) * 3.4, (rndC() - 0.5) * 14);
+      m.castShadow = true;
+      cl.add(m);
+    }
+    const a = rndC() * Math.PI * 2, d = rndC() * 2500;
+    cl.position.set(Math.cos(a) * d, 32 + rndC() * 44, Math.sin(a) * d);
+    clouds.push(cl);
+    scene.add(cl);
+  }
+}
+// 空（星と月、夜モード用。機体について動く）
+const sky = new THREE.Group();
+scene.add(sky);
+let starMat, moonMat;
+{
+  const n = 700, pos = new Float32Array(n * 3);
+  const rndS = rng(4242);
+  for (let i = 0; i < n; i++) {
+    const a = rndS() * Math.PI * 2, e = Math.acos(rndS() * 0.95);
+    const r = 2600;
+    pos[i * 3] = Math.cos(a) * Math.sin(e) * r;
+    pos[i * 3 + 1] = Math.cos(e) * r * 0.6 + 60;
+    pos[i * 3 + 2] = Math.sin(a) * Math.sin(e) * r;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  starMat = new THREE.PointsMaterial({ color: '#dfe8ff', size: 2.4, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  sky.add(new THREE.Points(g, starMat));
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g2 = c.getContext('2d');
+  const grad = g2.createRadialGradient(32, 32, 8, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(244,241,222,1)');
+  grad.addColorStop(0.75, 'rgba(244,241,222,0.95)');
+  grad.addColorStop(1, 'rgba(244,241,222,0)');
+  g2.fillStyle = grad; g2.fillRect(0, 0, 64, 64);
+  const mtex = new THREE.CanvasTexture(c);
+  moonMat = new THREE.SpriteMaterial({ map: mtex, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  const moon = new THREE.Sprite(moonMat);
+  moon.scale.setScalar(170);
+  moon.position.set(700, 520, -1500);
+  sky.add(moon);
+}
+
+// ---------- 機体 ----------
+const craft = new THREE.Group();
+const tilt = new THREE.Group();
+craft.add(tilt);
+scene.add(craft);
+const jetVox = buildVoxelStack(jetVoxels());
+jetVox.grp.position.y = -6;
+const robotVox = buildVoxelStack(robotVoxels());
+robotVox.grp.scale.set(1.7, 1.7, 0.9);
+robotVox.grp.position.y = -14.5;
+robotVox.grp.visible = false;
+tilt.add(jetVox.grp, robotVox.grp);
+
+const flame = new THREE.Mesh(new THREE.ConeGeometry(2.6, 9, 10), new THREE.MeshBasicMaterial({ color: '#f0580e' }));
+flame.rotation.x = Math.PI / 2;
+flame.position.set(0, 0, 19);
+tilt.add(flame);
+const flameCore = new THREE.Mesh(new THREE.ConeGeometry(1.4, 6, 8), new THREE.MeshBasicMaterial({ color: '#ffc23d' }));
+flameCore.rotation.x = Math.PI / 2;
+flameCore.position.set(0, 0, 17.5);
+tilt.add(flameCore);
+
+// ---------- 戦艦（潜って対空攻撃してくる） ----------
+const ship = { hp: 8, state: 'sail', t: 24, ang: 0.6, cx: 520, cz: -520, r: 380, y: 0, fireCd: 2.5, burstN: 0, burstT: 0 };
+const shipGrp = new THREE.Group();
+{
+  const hull = new THREE.MeshLambertMaterial({ color: '#454b54' });
+  const deck = new THREE.MeshLambertMaterial({ color: '#59616c' });
+  const dark = new THREE.MeshLambertMaterial({ color: '#33383f' });
+  const add = (geo, mat, x, y, z) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    shipGrp.add(m);
+    return m;
+  };
+  add(new THREE.BoxGeometry(66, 7, 13), hull, 0, 2.5, 0);
+  add(new THREE.BoxGeometry(58, 1.4, 11), deck, 0, 6.6, 0);
+  add(new THREE.BoxGeometry(10, 3.6, 9), dark, 20, 8.6, 0); // 前部砲塔
+  add(new THREE.BoxGeometry(10, 3.6, 9), dark, -22, 8.6, 0); // 後部砲塔
+  const barrelG = new THREE.CylinderGeometry(0.7, 0.7, 13, 6);
+  for (const s of [-1, 1]) {
+    for (const dz of [-2.2, 2.2]) {
+      const b = add(barrelG, dark, s * 30, 9.6, dz);
+      b.rotation.z = Math.PI / 2;
+    }
+  }
+  add(new THREE.BoxGeometry(9, 9, 8), deck, 2, 11.5, 0); // 艦橋
+  add(new THREE.BoxGeometry(1.2, 11, 1.2), dark, 2, 20, 0); // マスト
+  add(new THREE.BoxGeometry(6, 5, 5), dark, -8, 10, 0); // 煙突
+  scene.add(shipGrp);
+}
+
+// ---------- 粒子（爆発・水しぶき・飛行機雲） ----------
+function puffTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(16, 16, 2, 16, 16, 15);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 32, 32);
+  return new THREE.CanvasTexture(c);
+}
+const puffTex = puffTexture();
+const particles = []; // {sp, vel, life, max, grow}
+function spawnParticles(pos, n, colors, speed, life, size, up) {
+  for (let i = 0; i < n; i++) {
+    const mat = new THREE.SpriteMaterial({ map: puffTex, color: colors[i % colors.length], transparent: true, opacity: 0.95, depthWrite: false });
+    const sp = new THREE.Sprite(mat);
+    sp.position.copy(pos);
+    sp.scale.setScalar(size * (0.7 + Math.random() * 0.6));
+    scene.add(sp);
+    const a = Math.random() * Math.PI * 2, e = (Math.random() - 0.3) * 1.6;
+    const v = new THREE.Vector3(Math.cos(a) * Math.cos(e), Math.sin(e) + up, Math.sin(a) * Math.cos(e)).multiplyScalar(speed * (0.4 + Math.random() * 0.8));
+    particles.push({ sp, vel: v, life: 0, max: life * (0.7 + Math.random() * 0.6), grow: size * 1.6 });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life += dt;
+    if (p.life >= p.max) { scene.remove(p.sp); p.sp.material.dispose(); particles.splice(i, 1); continue; }
+    p.vel.y -= 14 * dt;
+    p.sp.position.addScaledVector(p.vel, dt);
+    if (p.sp.position.y < 0.4) { p.sp.position.y = 0.4; p.vel.y = Math.abs(p.vel.y) * 0.3; }
+    const f = 1 - p.life / p.max;
+    p.sp.material.opacity = 0.95 * f;
+    p.sp.scale.addScalar(p.grow * dt);
+  }
+}
+// 飛行機雲（翼端からたまに出る白い軌跡）
+const contrails = [];
+function spawnContrail(pos) {
+  const mat = new THREE.SpriteMaterial({ map: puffTex, color: '#ffffff', transparent: true, opacity: 0.5, depthWrite: false });
+  const sp = new THREE.Sprite(mat);
+  sp.position.copy(pos);
+  sp.scale.setScalar(1.6);
+  scene.add(sp);
+  contrails.push({ sp, life: 0, max: 0.85 });
+}
+function updateContrails(dt) {
+  for (let i = contrails.length - 1; i >= 0; i--) {
+    const p = contrails[i];
+    p.life += dt;
+    if (p.life >= p.max) { scene.remove(p.sp); p.sp.material.dispose(); contrails.splice(i, 1); continue; }
+    p.sp.material.opacity = 0.5 * (1 - p.life / p.max);
+    p.sp.scale.addScalar(4.5 * dt);
+  }
+}
+
+// ---------- 武器（弾・爆弾・対空砲弾） ----------
+function makePool(n, geo, mat) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(geo, mat);
+    m.visible = false;
+    scene.add(m);
+    out.push({ m, vel: new THREE.Vector3(), life: 0, active: false });
+  }
+  return out;
+}
+const bullets = makePool(40, new THREE.BoxGeometry(0.65, 0.65, 3.6), new THREE.MeshBasicMaterial({ color: '#ffd23e' }));
+const bombs = makePool(14, new THREE.SphereGeometry(1.15, 8, 6), new THREE.MeshLambertMaterial({ color: '#2f333a' }));
+const shells = makePool(26, new THREE.SphereGeometry(0.85, 8, 6), new THREE.MeshBasicMaterial({ color: '#ffb03a' }));
+function fireFrom(pool, pos, vel, life) {
+  const b = pool.find(b => !b.active);
+  if (!b) return;
+  b.m.position.copy(pos);
+  b.vel.copy(vel);
+  b.life = life;
+  b.active = true;
+  b.m.visible = true;
+}
+
+// ---------- 状態と操作 ----------
+const st = {
+  x: 0, z: 0, alt: 15, angle: -Math.PI / 2, bank: 0,
+  form: 0, morph: -1, swapped: false, roll: -1, view: 0,
+  night: 0, nightTarget: 0, shake: 0, fireT: 0, bombCd: 0, trailBurst: 0,
+};
+if (location.hash === '#robot') { st.form = 1; jetVox.grp.visible = false; robotVox.grp.visible = true; }
+if (location.hash === '#top') st.view = 1;
+if (location.hash === '#night') { st.nightTarget = 1; st.night = 1; }
+let pointer = null, pressing = false, pressAt = 0, lastInput = -10, firing = false, prevX = false;
+const keys = {};
+addEventListener('pointermove', e => { pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight }; lastInput = tNow; });
+cv.addEventListener('pointerdown', e => { pressing = true; pressAt = performance.now(); lastInput = tNow; });
+addEventListener('pointerup', () => {
+  if (pressing && performance.now() - pressAt < 250) startMorph();
+  pressing = false;
+});
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyT') startMorph();
+  if (e.code === 'KeyR') startRoll();
+  if (e.code === 'KeyV') st.view = 1 - st.view;
+  if (e.code === 'KeyN') st.nightTarget = 1 - st.nightTarget;
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+const bindBtn = (id, fn, isFire) => {
+  const el = document.getElementById(id);
+  el.addEventListener('pointerdown', e => { e.stopPropagation(); if (isFire) firing = true; else fn(); });
+  if (isFire) { el.addEventListener('pointerup', () => firing = false); el.addEventListener('pointerleave', () => firing = false); }
+};
+bindBtn('btn', startMorph);
+bindBtn('btn2', startRoll);
+bindBtn('btn3', () => { st.view = 1 - st.view; });
+bindBtn('btn4', null, true);
+bindBtn('btn5', dropBomb);
+bindBtn('btn6', () => { st.nightTarget = 1 - st.nightTarget; });
+function startMorph() { if (st.morph < 0) { st.morph = 0; st.swapped = false; } }
+function startRoll() { if (st.roll < 0 && st.morph < 0 && st.form === 0) st.roll = 0; }
+const _fwd = new THREE.Vector3(), _sp = new THREE.Vector3();
+function craftForward() { return _fwd.set(Math.cos(st.angle), 0, Math.sin(st.angle)); }
+function dropBomb() {
+  if (st.bombCd > 0 || st.morph >= 0) return;
+  st.bombCd = 0.35;
+  const b = bombs.find(b => !b.active);
+  if (!b) return;
+  b.m.position.set(st.x, st.alt - 3, st.z);
+  const f = craftForward();
+  const spd = (pressing || keys['Space']) ? 300 : 130;
+  b.vel.set(f.x * spd * (st.form === 1 ? 0.55 : 1) * 0.9, 0, f.z * spd * (st.form === 1 ? 0.55 : 1) * 0.9);
+  b.life = 6; b.active = true; b.m.visible = true;
+}
+function damageShip(n, at) {
+  if (ship.state === 'sunk' || ship.y < -8) return;
+  ship.hp -= n;
+  spawnParticles(at, 6, ['#ffb03a', '#f0580e', '#888888'], 16, 0.5, 3, 0.4);
+  if (ship.hp <= 0) {
+    ship.state = 'sunk'; ship.t = 20;
+    spawnParticles(shipGrp.position.clone().setY(6), 26, ['#f0580e', '#ffc23d', '#666666'], 30, 1.1, 6, 0.7);
+  }
+}
+
+// ---------- 毎フレーム ----------
+let tNow = 0, last = performance.now();
+const camPos = new THREE.Vector3(0, 30, 60);
+const camTarget = new THREE.Vector3();
+const ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; tNow = now / 1000;
+
+  // 操縦
+  let want = st.angle;
+  if (pointer && tNow - lastInput < 3) want = st.angle + (pointer.x - 0.5) * 2.2 * dt * 3;
+  else want = st.angle + Math.sin(tNow * 0.5) * 0.3 * dt;
+  const dc = Math.hypot(st.x, st.z);
+  if (dc > 2200) want = Math.atan2(-st.z, -st.x);
+  let diff = want - st.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const turn = Math.max(-2.6 * dt, Math.min(2.6 * dt, diff));
+  st.angle += turn;
+  const turnRate = dt > 0 ? turn / dt : 0;
+  st.bank += (Math.max(-1, Math.min(1, turnRate * 0.4)) - st.bank) * Math.min(1, dt * 6);
+
+  const boosting = (pressing || keys['Space']) && st.morph < 0;
+  const speed = (boosting ? 300 : 130) * (st.form === 1 ? 0.55 : 1);
+  st.x += Math.cos(st.angle) * speed * dt;
+  st.z += Math.sin(st.angle) * speed * dt;
+  const fwd = craftForward().clone();
+
+  // 変形
+  if (st.morph >= 0) {
+    st.morph += dt / 0.9;
+    if (st.morph >= 0.5 && !st.swapped) {
+      st.swapped = true;
+      st.form = 1 - st.form;
+      jetVox.grp.visible = st.form === 0;
+      robotVox.grp.visible = st.form === 1;
+    }
+    if (st.morph >= 1) { st.morph = -1; st.swapped = false; }
+  }
+  const burst = st.morph >= 0 ? Math.sin(Math.min(1, st.morph) * Math.PI) : 0;
+  layoutStack(jetVox, burst);
+  layoutStack(robotVox, burst);
+
+  // ロール
+  if (st.roll >= 0) { st.roll += dt / 0.8; if (st.roll >= 1) st.roll = -1; }
+  const rollA = st.roll >= 0 ? st.roll * Math.PI * 2 : 0;
+
+  // 姿勢（少し前傾。ブーストでさらに前傾）
+  craft.position.set(st.x, st.alt + Math.sin(tNow * 2.1) * 0.7, st.z);
+  craft.rotation.y = -st.angle - Math.PI / 2;
+  tilt.rotation.z = st.bank * 0.55 + rollA;
+  tilt.rotation.x += (((st.form === 0) ? (boosting ? -0.15 : -0.07) : 0) - tilt.rotation.x) * Math.min(1, dt * 5);
+  if (st.form === 1) {
+    robotVox.grp.position.y = -14.5 + Math.abs(Math.sin(tNow * 9)) * 0.9;
+    robotVox.grp.rotation.z = Math.sin(tNow * 9) * 0.03;
+  }
+  const fl = st.form === 0 && st.morph < 0;
+  flame.visible = flameCore.visible = fl;
+  if (fl) {
+    const s = (boosting ? 1.7 : 1) * (1 + Math.sin(tNow * 47) * 0.18);
+    flame.scale.set(1, s, 1);
+    flameCore.scale.set(1, s, 1);
+  }
+  craft.updateMatrixWorld();
+
+  // 飛行機雲: バンクが大きい時＋たまにランダムで
+  if (st.form === 0 && st.morph < 0) {
+    if (Math.random() < dt * 0.55) st.trailBurst = 0.55;
+    if (st.trailBurst > 0) st.trailBurst -= dt;
+    if (Math.abs(st.bank) > 0.32 || st.trailBurst > 0 || boosting) {
+      for (const sx of [-14.6, 14.6]) {
+        _sp.set(sx, -2, -0.5);
+        tilt.localToWorld(_sp);
+        spawnContrail(_sp);
+      }
+    }
+  }
+  updateContrails(dt);
+
+  // 弾（Z / 弾ボタン長押し）
+  st.fireT -= dt;
+  if ((keys['KeyZ'] || firing) && st.morph < 0 && st.fireT <= 0) {
+    st.fireT = 0.085;
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(craft.quaternion);
+    if (st.form === 0) {
+      const side = (Math.random() < 0.5 ? -5.5 : 5.5);
+      _sp.set(side, -1, -13);
+    } else _sp.set(0, 1, -7);
+    tilt.localToWorld(_sp);
+    fireFrom(bullets, _sp, dir.multiplyScalar(640).add(fwd.clone().multiplyScalar(speed)), 1.3);
+  }
+  // 爆弾（X / 爆弾ボタン）
+  st.bombCd -= dt;
+  if (keys['KeyX'] && !prevX) dropBomb();
+  prevX = !!keys['KeyX'];
+
+  // 弾の更新
+  for (const b of bullets) {
+    if (!b.active) continue;
+    b.life -= dt;
+    b.m.position.addScaledVector(b.vel, dt);
+    let hit = b.life <= 0;
+    // 戦艦への命中
+    if (!hit && ship.y > -8 && ship.state !== 'sunk') {
+      const d = Math.hypot(b.m.position.x - shipGrp.position.x, b.m.position.z - shipGrp.position.z);
+      if (d < 32 && b.m.position.y < 17) { damageShip(1, b.m.position.clone()); hit = true; }
+    }
+    if (hit) { b.active = false; b.m.visible = false; }
+  }
+  // 爆弾の更新
+  for (const b of bombs) {
+    if (!b.active) continue;
+    b.life -= dt;
+    b.vel.y -= 62 * dt;
+    b.m.position.addScaledVector(b.vel, dt);
+    if (b.m.position.y <= 0.6 || b.life <= 0) {
+      const at = b.m.position.clone(); at.y = 1;
+      spawnParticles(at, 16, ['#ffffff', '#bcd8ff', '#7fb2e8'], 20, 0.8, 4.5, 1.2); // 水しぶき
+      const d = Math.hypot(at.x - shipGrp.position.x, at.z - shipGrp.position.z);
+      if (d < 36 && ship.y > -8) damageShip(3, at.clone().setY(6));
+      b.active = false; b.m.visible = false;
+    }
+  }
+
+  // 戦艦の行動（周回・潜航・対空攻撃）
+  {
+    ship.t -= dt;
+    ship.ang += dt * 0.011;
+    const px = ship.cx + Math.cos(ship.ang) * ship.r, pz = ship.cz + Math.sin(ship.ang) * ship.r;
+    const dirx = -Math.sin(ship.ang), dirz = Math.cos(ship.ang);
+    let targetY = 0;
+    if (ship.state === 'sail') { targetY = 0; if (ship.t <= 0) { ship.state = 'diving'; ship.t = 4.5; } }
+    else if (ship.state === 'diving') { targetY = -25; if (ship.t <= 0) { ship.state = 'sub'; ship.t = 11; } }
+    else if (ship.state === 'sub') { targetY = -25; if (ship.t <= 0) { ship.state = 'surfacing'; ship.t = 4.5; } }
+    else if (ship.state === 'surfacing') { targetY = 0; if (ship.t <= 0) { ship.state = 'sail'; ship.t = 24 + Math.random() * 10; } }
+    else if (ship.state === 'sunk') { targetY = -25; if (ship.t <= 0) { ship.hp = 8; ship.state = 'surfacing'; ship.t = 4.5; } }
+    ship.y += (targetY - ship.y) * Math.min(1, dt * 0.9);
+    shipGrp.position.set(px, ship.y + Math.sin(tNow * 0.9) * 0.35, pz);
+    shipGrp.rotation.y = Math.atan2(-dirz, dirx);
+    shipGrp.rotation.z = Math.sin(tNow * 0.7) * 0.008;
+    // 対空攻撃: 浮上中＆射程内なら3点バースト
+    const pd = Math.hypot(st.x - px, st.z - pz);
+    if (ship.state === 'sail' && pd < 680) {
+      ship.fireCd -= dt;
+      if (ship.burstN > 0) {
+        ship.burstT -= dt;
+        if (ship.burstT <= 0) {
+          ship.burstT = 0.13; ship.burstN--;
+          const from = new THREE.Vector3(px + dirx * 20, 10, pz + dirz * 20);
+          const to = new THREE.Vector3(st.x + (Math.random() - 0.5) * 60, st.alt + (Math.random() - 0.5) * 22, st.z + (Math.random() - 0.5) * 60);
+          fireFrom(shells, from, to.sub(from).normalize().multiplyScalar(300), 3.2);
+        }
+      } else if (ship.fireCd <= 0) { ship.fireCd = 1.7 + Math.random() * 0.9; ship.burstN = 3; ship.burstT = 0; }
+    }
+  }
+  // 対空砲弾の更新（近づくと弾けて揺れる。当たって死ぬことはない）
+  for (const s of shells) {
+    if (!s.active) continue;
+    s.life -= dt;
+    s.m.position.addScaledVector(s.vel, dt);
+    const d = s.m.position.distanceTo(craft.position);
+    if (d < 15) {
+      spawnParticles(s.m.position.clone(), 8, ['#ffd9a0', '#ffffff', '#999999'], 12, 0.5, 3.4, 0.2);
+      st.shake = Math.max(st.shake, 0.55);
+      s.active = false; s.m.visible = false;
+    } else if (s.life <= 0 || s.m.position.y < 0) {
+      spawnParticles(s.m.position.clone(), 4, ['#cccccc', '#ffffff'], 7, 0.4, 2.4, 0.2);
+      s.active = false; s.m.visible = false;
+    }
+  }
+  updateParticles(dt);
+
+  // 雲（当たり判定なし。ゆっくり流れる）
+  for (const cl of clouds) {
+    cl.position.x += dt * 1.3;
+    if (cl.position.x - st.x > 2600) cl.position.x -= 5200;
+    if (cl.position.x - st.x < -2600) cl.position.x += 5200;
+  }
+
+  // 太陽と空（影は機体のそばに追従）
+  sun.position.set(st.x + 70, 110, st.z + 40);
+  sun.target.position.set(st.x, 0, st.z);
+  sky.position.set(st.x, 0, st.z);
+
+  // 昼夜の遷移
+  st.night += (st.nightTarget - st.night) * Math.min(1, dt * 2.2);
+  const nf = st.night;
+  scene.background.lerpColors(DAY.bg, NIGHT.bg, nf);
+  scene.fog.color.copy(scene.background);
+  scene.fog.near = DAY.fogNear + (NIGHT.fogNear - DAY.fogNear) * nf;
+  scene.fog.far = DAY.fogFar + (NIGHT.fogFar - DAY.fogFar) * nf;
+  seaMat.color.lerpColors(DAY.sea, NIGHT.sea, nf);
+  hemi.intensity = DAY.hemi + (NIGHT.hemi - DAY.hemi) * nf;
+  sun.intensity = DAY.sun + (NIGHT.sun - DAY.sun) * nf;
+  sun.color.lerpColors(DAY.sunCol, NIGHT.sunCol, nf);
+  cloudMat.color.lerpColors(DAY.cloud, NIGHT.cloud, nf);
+  starMat.opacity = nf * 0.95;
+  moonMat.opacity = nf;
+
+  // カメラ
+  const back = fwd;
+  let wantPos, wantLook;
+  if (st.view === 0) {
+    wantPos = new THREE.Vector3(st.x - back.x * 46, st.alt + 21, st.z - back.z * 46);
+    wantLook = new THREE.Vector3(st.x + back.x * 14, st.alt + 1, st.z + back.z * 14);
+  } else {
+    wantPos = new THREE.Vector3(st.x, st.alt + 95, st.z + 0.01);
+    wantLook = new THREE.Vector3(st.x, st.alt, st.z);
+  }
+  const k = 1 - Math.exp(-dt * 4.5);
+  camPos.lerp(wantPos, k);
+  camTarget.lerp(wantLook, k);
+  camera.position.copy(camPos);
+  if (st.shake > 0.01) {
+    camera.position.x += (Math.random() - 0.5) * st.shake * 2.4;
+    camera.position.y += (Math.random() - 0.5) * st.shake * 2.4;
+    st.shake *= Math.exp(-dt * 5);
+  }
+  camera.lookAt(camTarget);
+
+  // HUD（戦艦の方角つき）
+  const sdx = shipGrp.position.x - st.x, sdz = shipGrp.position.z - st.z;
+  const sDist = Math.round(Math.hypot(sdx, sdz));
+  let rel = Math.atan2(sdz, sdx) - st.angle;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  const arrow = ARROWS[Math.round(((rel + Math.PI / 8) % (Math.PI * 2)) / (Math.PI / 4)) % 8];
+  const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!' }[ship.state];
+  hud.textContent = `SPRITE STACK PROTO v0.7 (three.js)\nFORM: ${st.form === 0 ? '戦闘機' : 'ロボット'}${boosting ? '  BOOST!' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m`;
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "cdf4ee53507948e4a412f503875833cd"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>
