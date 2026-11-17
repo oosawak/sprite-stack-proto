@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.20 (three.js)</title>
+<title>スプライトスタック試作 v0.21 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -53,7 +53,8 @@
 <div id="cross"></div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.20 (three.js 版) =====
+// ===== スプライトスタック試作 v0.21 (three.js 版) =====
+// v0.21: 高度の動きを形態で変えた。中間形態は垂直にスッと目標高度へ直行し、戦闘機は垂直速度に慣性がついてふわっと遅れて昇降する。
 // v0.20: 戦闘機と中間形態で高度を上げ下げできるようにした（ポインタの上下が操縦桿、↑↓キーでも）。高度は8〜60、HUDにALT表示。
 // v0.19: レーザーを照準（画面中央）のレイで狙う方式に変更。銃口が右手で中心からずれている分、ビームが照準の先の一点へ収束するので、照準と着弾が一致する。
 // v0.18: ロボット形態ではカメラがゆっくり頭の位置へ寄ってFPSになり、画面中央にレーザー用の照準が出る。照準の上下はポインタ/↑↓で動き、レーザーは照準の方向へ飛ぶ。他形態へ変形すると追跡視点へ戻る。レーザーのビームを太く明るくし、銃も大きくした（v0.17で見えにくかったため）。
@@ -1055,12 +1056,24 @@ function frame(now) {
 
   // 高度の上げ下げ（戦闘機と中間形態。ポインタの上下が操縦桿、↑↓キーでも）
   if (st.form < 2) {
-    if (st.altT === undefined) st.altT = st.alt;
+    if (st.altT === undefined) { st.altT = st.alt; st.altV = 0; }
     if (pointer && tNow - lastInput < 6) st.altT = 8 + (1 - pointer.y) * 52;
     if (keys['ArrowUp']) st.altT = Math.min(60, st.altT + dt * 30);
     if (keys['ArrowDown']) st.altT = Math.max(8, st.altT - dt * 30);
     st.altT = Math.max(8, Math.min(60, st.altT));
-    st.alt += (st.altT - st.alt) * Math.min(1, dt * 2.5);
+    if (st.form === 1) {
+      // 中間形態: 垂直にスッと動く（VTOLらしく目標高度へ直行）
+      const d = st.altT - st.alt, step = 60 * dt;
+      st.alt += Math.abs(d) < step ? d : Math.sign(d) * step;
+      st.altV = 0;
+    } else {
+      // 戦闘機: 慣性つき（垂直速度が遅れてついてきて、ふわっと昇降する）
+      const want = Math.max(-38, Math.min(38, (st.altT - st.alt) * 0.9));
+      st.altV += (want - st.altV) * Math.min(1, dt * 1.1);
+      st.alt += st.altV * dt;
+      if (st.alt < 8) { st.alt = 8; st.altV = Math.max(0, st.altV); }
+      if (st.alt > 60) { st.alt = 60; st.altV = Math.min(0, st.altV); }
+    }
   }
 
   // 照準の上下（ロボットのレーザー用）
@@ -1322,7 +1335,7 @@ function frame(now) {
   }
   const wantJumpBtn = st.form === 2 && st.morph < 0 ? 'block' : 'none';
   if (btn7El.style.display !== wantJumpBtn) btn7El.style.display = wantJumpBtn;
-  hud.textContent = `SPRITE STACK PROTO v0.20 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  hud.textContent = `SPRITE STACK PROTO v0.21 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
