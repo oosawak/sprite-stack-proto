@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.21 (three.js)</title>
+<title>スプライトスタック試作 v0.22 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -30,6 +30,9 @@
   #btn7 { right: 12px; bottom: 148px; background: #6a4a9c; display: none; }
   #cross { position: fixed; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border: 2px solid rgba(174,244,255,.9); border-radius: 50%; opacity: 0; pointer-events: none; z-index: 5; }
   #cross::after { content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; background: #aef4ff; border-radius: 50%; }
+  #joy { position: fixed; left: 16px; bottom: 18px; width: 124px; height: 124px; border-radius: 50%; background: rgba(20,30,50,.35); border: 2px solid rgba(174,244,255,.45); display: none; z-index: 6; touch-action: none; }
+  #joyKnob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(174,244,255,.5); border: 2px solid rgba(255,255,255,.6); }
+  @media (pointer: coarse) { #joy { display: block; } #radar { bottom: 158px; } }
   #radar {
     position: fixed; left: 10px; bottom: 34px; width: 118px; height: 118px;
     border-radius: 50%; border: 2px solid rgba(140,255,180,0.5); pointer-events: none;
@@ -51,9 +54,11 @@
 <div id="btn" class="btn">変形</div>
 <div id="btn7" class="btn">跳</div>
 <div id="cross"></div>
+<div id="joy"><div id="joyKnob"></div></div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.21 (three.js 版) =====
+// ===== スプライトスタック試作 v0.22 (three.js 版) =====
+// v0.22: ロールが最後まで回らないバグを修正（バンクの追従計算と混ざっていたため、途中で引き戻されていた）。スマホ操作を作り替え: 左下にジョイスティックを追加し、タッチの指の位置では操縦しないようにした（ボタンを押した指の動きや、離した後の残り入力で勝手に左右へ曲がる問題も解消）。
 // v0.21: 高度の動きを形態で変えた。中間形態は垂直にスッと目標高度へ直行し、戦闘機は垂直速度に慣性がついてふわっと遅れて昇降する。
 // v0.20: 戦闘機と中間形態で高度を上げ下げできるようにした（ポインタの上下が操縦桿、↑↓キーでも）。高度は8〜60、HUDにALT表示。
 // v0.19: レーザーを照準（画面中央）のレイで狙う方式に変更。銃口が右手で中心からずれている分、ビームが照準の先の一点へ収束するので、照準と着弾が一致する。
@@ -736,14 +741,19 @@ stacks.forEach((s, i) => s.grp.visible = i === st.form);
 if (location.hash === '#top') st.view = 1;
 if (location.hash === '#night') { st.nightTarget = 1; st.night = 1; }
 enemies.push(makeEnemy(0), makeEnemy(1), makeEnemy(2));
-let pointer = null, pressing = false, pressAt = 0, lastInput = -10, firing = false, prevX = false, pressType = 'touch';
+let pointer = null, pressing = false, pressAt = 0, lastInput = -10, firing = false, prevX = false, pressType = 'touch', pointerFromJoy = false;
 const keys = {};
-addEventListener('pointermove', e => { pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight }; lastInput = tNow; });
+addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') return; // スマホの操縦はジョイスティックだけにする（指の位置で勝手に曲がらないように）
+  if (e.target && e.target.closest && e.target.closest('.btn, #joy')) return;
+  pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight };
+  pointerFromJoy = false;
+  lastInput = tNow;
+});
 cv.addEventListener('pointerdown', e => {
   pressType = e.pointerType || 'touch';
-  pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight };
   lastInput = tNow;
-  if (pressType === 'mouse') firing = true; // マウスのクリックは攻撃（Zと同じ）
+  if (pressType === 'mouse') { pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight }; pointerFromJoy = false; firing = true; } // マウスのクリックは攻撃（Zと同じ）
   else { pressing = true; pressAt = performance.now(); }
 });
 addEventListener('pointerup', e => {
@@ -773,6 +783,27 @@ bindBtn('btn3', () => { st.view = 1 - st.view; });
 bindBtn('btn4', null, true);
 bindBtn('btn5', subAttack);
 bindBtn('btn7', tryJump);
+// スマホ用ジョイスティック（左下）。倒した方向がそのまま操縦入力になる
+const joy = { active: false, dx: 0, dy: 0 };
+const joyEl = document.getElementById('joy');
+const knobEl = document.getElementById('joyKnob');
+function joySet(e) {
+  const r = joyEl.getBoundingClientRect();
+  let dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
+  let dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+  const m = Math.hypot(dx, dy);
+  if (m > 1) { dx /= m; dy /= m; }
+  joy.dx = dx; joy.dy = dy;
+  knobEl.style.transform = `translate(${dx * 36}px, ${dy * 36}px)`;
+  pointer = { x: 0.5 + dx * 0.5, y: 0.5 + dy * 0.5 };
+  pointerFromJoy = true;
+  lastInput = tNow;
+}
+joyEl.addEventListener('pointerdown', e => { e.stopPropagation(); joy.active = true; try { joyEl.setPointerCapture(e.pointerId); } catch (_) {} joySet(e); });
+joyEl.addEventListener('pointermove', e => { if (joy.active) joySet(e); });
+const joyEnd = () => { joy.active = false; joy.dx = 0; joy.dy = 0; knobEl.style.transform = ''; pointer = { x: 0.5, y: 0.5 }; pointerFromJoy = true; lastInput = tNow; };
+joyEl.addEventListener('pointerup', joyEnd);
+joyEl.addEventListener('pointercancel', joyEnd);
 const helpEl = document.getElementById('help');
 const crossEl = document.getElementById('cross');
 const btn7El = document.getElementById('btn7');
@@ -998,9 +1029,10 @@ function frame(now) {
     }
   }
 
-  // ロール
+  // ロール（1回転ぶんの角度を、なめらかな加速つきでそのまま使う）
   if (st.roll >= 0) { st.roll += dt / 0.8; if (st.roll >= 1) st.roll = -1; }
-  const rollA = st.roll >= 0 ? st.roll * Math.PI * 2 : 0;
+  const rp = st.roll >= 0 ? st.roll : 0;
+  const rollA = rp * rp * (3 - 2 * rp) * Math.PI * 2;
 
   // 姿勢（少し前傾。ブーストでさらに前傾）
   // ロボットのジャンプ（垂直）と近接攻撃の踏み込み
@@ -1020,7 +1052,9 @@ function frame(now) {
   craft.rotation.y = -st.angle - Math.PI / 2;
   // ロボット形態では傾けず、まっすぐ立ったまま向きが変わる（中間形態は傾き控えめ）
   const bankVis = st.form === 2 ? 0 : st.form === 1 ? st.bank * 0.45 : st.bank;
-  tilt.rotation.z += ((bankVis * 0.55 + rollA) - tilt.rotation.z) * Math.min(1, dt * 6);
+  if (st.bankS === undefined) st.bankS = 0;
+  st.bankS += (bankVis * 0.55 - st.bankS) * Math.min(1, dt * 6);
+  tilt.rotation.z = st.bankS + rollA;
   tilt.rotation.x += (((st.form === 0) ? (boosting ? -0.15 : -0.07) : st.form === 1 ? -0.04 : 0) - tilt.rotation.x) * Math.min(1, dt * 5);
   if (st.form === 2) {
     const mv = Math.min(1, speed / 60);
@@ -1057,7 +1091,8 @@ function frame(now) {
   // 高度の上げ下げ（戦闘機と中間形態。ポインタの上下が操縦桿、↑↓キーでも）
   if (st.form < 2) {
     if (st.altT === undefined) { st.altT = st.alt; st.altV = 0; }
-    if (pointer && tNow - lastInput < 6) st.altT = 8 + (1 - pointer.y) * 52;
+    if (joy.active) st.altT += -joy.dy * dt * 45;
+    else if (pointer && !pointerFromJoy && tNow - lastInput < 6) st.altT = 8 + (1 - pointer.y) * 52;
     if (keys['ArrowUp']) st.altT = Math.min(60, st.altT + dt * 30);
     if (keys['ArrowDown']) st.altT = Math.max(8, st.altT - dt * 30);
     st.altT = Math.max(8, Math.min(60, st.altT));
@@ -1335,7 +1370,7 @@ function frame(now) {
   }
   const wantJumpBtn = st.form === 2 && st.morph < 0 ? 'block' : 'none';
   if (btn7El.style.display !== wantJumpBtn) btn7El.style.display = wantJumpBtn;
-  hud.textContent = `SPRITE STACK PROTO v0.21 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  hud.textContent = `SPRITE STACK PROTO v0.22 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
