@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.15 (three.js)</title>
+<title>スプライトスタック試作 v0.17 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -27,6 +27,7 @@
   #btn4 { right: 12px; bottom: 92px; background: #3366cc; }
   #btn5 { right: 118px; bottom: 92px; background: #a83a32; }
   #btn6 { right: 224px; bottom: 92px; background: #2c3e70; }
+  #btn7 { right: 12px; bottom: 148px; background: #6a4a9c; display: none; }
   #radar {
     position: fixed; left: 10px; bottom: 34px; width: 118px; height: 118px;
     border-radius: 50%; border: 2px solid rgba(140,255,180,0.5); pointer-events: none;
@@ -46,9 +47,13 @@
 <div id="btn3" class="btn">視点</div>
 <div id="btn2" class="btn">ロール</div>
 <div id="btn" class="btn">変形</div>
+<div id="btn7" class="btn">跳</div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.15 (three.js 版) =====
+// ===== スプライトスタック試作 v0.17 (three.js 版) =====
+// v0.17: 武器を形態ごとに別物にした（戦闘機=連装砲、中間形態=ガトリング（撃ち続けると連射加速）、ロボット=右手のレーザー銃（熱管理つき））。ロボット専用に垂直ジャンプ（C/跳ボタン）と近接攻撃（X/近接ボタン、爆弾と切替）を追加。マウスクリックは攻撃に変更（変形はT/ダブルクリック/タッチのタップ）。
+// v0.16: ロボット形態では機体を傾けず、まっすぐ立ったまま向きが変わるようにした。カメラもロボット形態では少し低く近づき、背後へしっかりつく。中間形態は傾き控えめに。止まっているロボットの揺れは静かなホバー調に。
+// v0.16: ロボット形態では機体を傾けず、まっすぐ立ったまま向きが変わるようにした。カメラもロボット形態では少し低く近づき、背後へしっかりつく。中間形態は傾き控えめに。止まっているロボットの揺れは静かなホバー調に。
 // v0.15: 戦艦をボクセル化し、同じボクセル（3,940個）の組み替えで巨大ロボットに変形するようにした。航行→変形→ロボット（自機を向いて5連拡散射撃）→変形→航行と潜航を交互に繰り返す。
 // v0.14: 形態ごとに動きを差別化。中間形態も止まれるようにし、旋回を最速にしてその場で回転（ピボット）できるようにした。ロボットの旋回は中程度、戦闘機は従来どおり止まれず真っすぐ飛ぶ。
 // v0.13: ロボット形態で止まれるようにした（長押しで移動、離すと減速してホバー）。
@@ -345,6 +350,27 @@ morphMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 morphMesh.castShadow = true;
 morphMesh.visible = false;
 tilt.add(morphMesh);
+
+// ロボットの右手のレーザー銃とビーム
+const gunGrp = new THREE.Group();
+const gunTip = new THREE.Object3D();
+{
+  const dark = new THREE.MeshLambertMaterial({ color: '#2c313a' });
+  const mid = new THREE.MeshLambertMaterial({ color: '#4a5462' });
+  const tipM = new THREE.MeshBasicMaterial({ color: '#7fe7ff' });
+  const b1 = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.4, 5.5), dark); b1.castShadow = true;
+  const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 5), mid); b2.position.set(0, 0.4, -4.5);
+  const b3 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.9), tipM); b3.position.set(0, 0.4, -7.2);
+  gunTip.position.set(0, 0.4, -7.7);
+  gunGrp.add(b1, b2, b3, gunTip);
+  gunGrp.position.set(8.6, 0.2, -2.5);
+  stacks[2].grp.add(gunGrp);
+}
+const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 1, 6, 1, true), new THREE.MeshBasicMaterial({ color: '#aef4ff', transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+const beamGlow = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 1, 6, 1, true), new THREE.MeshBasicMaterial({ color: '#23aff0', transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+beam.visible = beamGlow.visible = false;
+scene.add(beam, beamGlow);
+const _muzzle = new THREE.Vector3(), _bd = new THREE.Vector3(), _tp = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 let morphFrom = null, morphTo = null;
 function bakedParts(stack) {
   const s = stack.grp.scale.x, o = stack.grp.position;
@@ -702,15 +728,25 @@ stacks.forEach((s, i) => s.grp.visible = i === st.form);
 if (location.hash === '#top') st.view = 1;
 if (location.hash === '#night') { st.nightTarget = 1; st.night = 1; }
 enemies.push(makeEnemy(0), makeEnemy(1), makeEnemy(2));
-let pointer = null, pressing = false, pressAt = 0, lastInput = -10, firing = false, prevX = false;
+let pointer = null, pressing = false, pressAt = 0, lastInput = -10, firing = false, prevX = false, pressType = 'touch';
 const keys = {};
 addEventListener('pointermove', e => { pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight }; lastInput = tNow; });
-cv.addEventListener('pointerdown', e => { pressing = true; pressAt = performance.now(); lastInput = tNow; });
-addEventListener('pointerup', () => {
-  if (pressing && performance.now() - pressAt < 250) startMorph();
+cv.addEventListener('pointerdown', e => {
+  pressType = e.pointerType || 'touch';
+  pointer = { x: e.clientX / innerWidth, y: e.clientY / innerHeight };
+  lastInput = tNow;
+  if (pressType === 'mouse') firing = true; // マウスのクリックは攻撃（Zと同じ）
+  else { pressing = true; pressAt = performance.now(); }
+});
+addEventListener('pointerup', e => {
+  if ((e.pointerType || pressType) === 'mouse') { firing = false; return; }
+  if (pressing && performance.now() - pressAt < 250) startMorph(); // タッチのタップは変形
   pressing = false;
 });
+addEventListener('pointercancel', () => { firing = false; pressing = false; });
+cv.addEventListener('dblclick', () => startMorph());
 addEventListener('keydown', e => {
+  if (e.code === 'KeyC' && !keys['KeyC']) tryJump();
   keys[e.code] = true;
   if (e.code === 'KeyT') startMorph();
   if (e.code === 'KeyR') startRoll();
@@ -727,7 +763,16 @@ bindBtn('btn', startMorph);
 bindBtn('btn2', startRoll);
 bindBtn('btn3', () => { st.view = 1 - st.view; });
 bindBtn('btn4', null, true);
-bindBtn('btn5', dropBomb);
+bindBtn('btn5', subAttack);
+bindBtn('btn7', tryJump);
+const helpEl = document.getElementById('help');
+const btn7El = document.getElementById('btn7');
+const HELP_TEXTS = [
+  'Z / クリック長押し: 攻撃 ・ X: 爆弾 ・ T / ダブルクリック / タップ: 変形 ・ R: ROLL ・ V: VIEW ・ N: NIGHT ・ 長押し: BOOST',
+  'Z / クリック長押し: ガトリング（撃ち続けると連射が速くなる） ・ X: 爆弾 ・ T: 変形 ・ Space / 画面長押し: 移動（離すと停止） ・ その場で回転できる',
+  'Z / クリック長押し: レーザー（熱で止まる） ・ X: 近接攻撃 ・ C / 跳: ジャンプ ・ T: 変形 ・ Space / 画面長押し: 移動（離すと停止）',
+];
+let helpForm = -1;
 bindBtn('btn6', () => { st.nightTarget = 1 - st.nightTarget; });
 function startMorph() {
   if (st.morph >= 0) return;
@@ -751,6 +796,70 @@ function dropBomb() {
   const spd = (pressing || keys['Space']) ? 300 : 130;
   b.vel.set(f.x * spd * FORM_SPEED[st.form] * 0.9, 0, f.z * spd * FORM_SPEED[st.form] * 0.9);
   b.life = 6; b.active = true; b.m.visible = true;
+}
+function updateLaser(dt, wantFire) {
+  if (st.heat === undefined) { st.heat = 0; st.over = false; st.laserTick = 0; }
+  const active = wantFire && !st.over && st.morph < 0;
+  if (active) { st.heat += dt / 3.5; if (st.heat >= 1) { st.heat = 1; st.over = true; } }
+  else { st.heat = Math.max(0, st.heat - dt / 1.6); if (st.over && st.heat < 0.35) st.over = false; }
+  if (!active) { beam.visible = beamGlow.visible = false; st.laserTick = 0; return; }
+  gunTip.getWorldPosition(_muzzle);
+  _bd.copy(craftForward());
+  let best = 430, hitE = null, hitShipFlag = false;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    _tp.set(e.x - _muzzle.x, e.alt - _muzzle.y, e.z - _muzzle.z);
+    const proj = _tp.dot(_bd);
+    if (proj < 0 || proj > best) continue;
+    const cx = _muzzle.x + _bd.x * proj, cy = _muzzle.y + _bd.y * proj, cz = _muzzle.z + _bd.z * proj;
+    if (Math.hypot(e.x - cx, e.alt - cy, e.z - cz) < 18) { best = proj; hitE = e; hitShipFlag = false; }
+  }
+  for (let s = 10; s < best; s += 14) {
+    _tp.copy(_muzzle).addScaledVector(_bd, s);
+    if (shipHitAt(_tp, ship.formT > 0.5 ? 68 : 17)) { best = s; hitE = null; hitShipFlag = true; break; }
+  }
+  const L = Math.max(6, best);
+  _tp.copy(_muzzle).addScaledVector(_bd, L / 2);
+  beam.position.copy(_tp); beamGlow.position.copy(_tp);
+  beam.scale.set(1, L, 1); beamGlow.scale.set(1, L, 1);
+  beam.quaternion.setFromUnitVectors(_up, _bd); beamGlow.quaternion.copy(beam.quaternion);
+  beam.visible = beamGlow.visible = true;
+  if (hitE || hitShipFlag) {
+    _tp.copy(_muzzle).addScaledVector(_bd, best);
+    spawnParticles(_tp, 2, ['#aef4ff', '#23aff0', '#ffffff'], 12, 0.3, 2.6, 0.2);
+    st.laserTick += dt;
+    while (st.laserTick >= 0.25) {
+      st.laserTick -= 0.25;
+      if (hitE) damageEnemy(hitE, 2, _tp.clone());
+      else damageShip(1, _tp.clone());
+    }
+  } else st.laserTick = 0;
+}
+function subAttack() { if (st.form === 2) melee(); else dropBomb(); }
+function tryJump() {
+  if (st.form !== 2 || st.morph >= 0) return;
+  if ((st.jumpOff || 0) > 0 || (st.jumpV || 0) !== 0) return;
+  st.jumpV = 62;
+  spawnParticles(new THREE.Vector3(st.x, st.alt - 4, st.z), 12, ['#bcd8ff', '#ffffff'], 16, 0.5, 3.5, -0.4);
+}
+function melee() {
+  if ((st.meleeCd || 0) > 0 || st.morph >= 0) return;
+  st.meleeCd = 0.5; st.meleeT = 0.22;
+  const f = craftForward();
+  let hitAny = false;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const dx = e.x - st.x, dz = e.z - st.z, d = Math.hypot(dx, dz);
+    if (d < 62 && (dx * f.x + dz * f.z) / Math.max(1, d) > 0.1 && Math.abs(e.alt - st.alt) < 26) {
+      damageEnemy(e, 4, new THREE.Vector3(e.x, e.alt, e.z)); hitAny = true;
+    }
+  }
+  const sdx = ship.x - st.x, sdz = ship.z - st.z, sd = Math.hypot(sdx, sdz);
+  if (sd < 100 && (sdx * f.x + sdz * f.z) / Math.max(1, sd) > 0 && ship.y > -8 && ship.state !== 'sunk') {
+    damageShip(2, new THREE.Vector3(ship.x, 12, ship.z)); hitAny = true;
+  }
+  spawnParticles(new THREE.Vector3(st.x + f.x * 15, st.alt + 1, st.z + f.z * 15), 10, ['#ffffff', '#ffc23d'], 18, 0.35, 3.5, 0.2);
+  st.shake = Math.max(st.shake || 0, hitAny ? 0.7 : 0.25);
 }
 function damageShip(n, at) {
   if (ship.state === 'sunk' || ship.y < -8) return;
@@ -862,13 +971,29 @@ function frame(now) {
   const rollA = st.roll >= 0 ? st.roll * Math.PI * 2 : 0;
 
   // 姿勢（少し前傾。ブーストでさらに前傾）
-  craft.position.set(st.x, st.alt + Math.sin(tNow * 2.1) * 0.7, st.z);
+  // ロボットのジャンプ（垂直）と近接攻撃の踏み込み
+  if (st.jumpV === undefined) { st.jumpV = 0; st.jumpOff = 0; }
+  if (st.jumpV !== 0 || st.jumpOff > 0) {
+    st.jumpV -= 150 * dt;
+    st.jumpOff += st.jumpV * dt;
+    if (st.jumpOff <= 0) {
+      st.jumpOff = 0; st.jumpV = 0;
+      spawnParticles(new THREE.Vector3(st.x, st.alt - 4, st.z), 8, ['#bcd8ff', '#ffffff'], 12, 0.45, 3, 0.5);
+    }
+  }
+  if (st.meleeT === undefined) { st.meleeT = 0; st.meleeCd = 0; }
+  st.meleeCd = Math.max(0, st.meleeCd - dt);
+  craft.position.set(st.x, st.alt + Math.sin(tNow * 2.1) * 0.7 + st.jumpOff, st.z);
+  if (st.meleeT > 0) { st.meleeT -= dt; const mp = 1 - Math.max(0, st.meleeT) / 0.22; craft.position.addScaledVector(fwd, 7 * Math.sin(mp * Math.PI)); }
   craft.rotation.y = -st.angle - Math.PI / 2;
-  tilt.rotation.z = st.bank * 0.55 + rollA;
+  // ロボット形態では傾けず、まっすぐ立ったまま向きが変わる（中間形態は傾き控えめ）
+  const bankVis = st.form === 2 ? 0 : st.form === 1 ? st.bank * 0.45 : st.bank;
+  tilt.rotation.z += ((bankVis * 0.55 + rollA) - tilt.rotation.z) * Math.min(1, dt * 6);
   tilt.rotation.x += (((st.form === 0) ? (boosting ? -0.15 : -0.07) : st.form === 1 ? -0.04 : 0) - tilt.rotation.x) * Math.min(1, dt * 5);
   if (st.form === 2) {
-    stacks[2].grp.position.y = 5 + Math.abs(Math.sin(tNow * 9)) * 0.9;
-    stacks[2].grp.rotation.z = Math.sin(tNow * 9) * 0.03;
+    const mv = Math.min(1, speed / 60);
+    stacks[2].grp.position.y = 5 + Math.abs(Math.sin(tNow * (3 + 6 * mv))) * (0.25 + 0.65 * mv);
+    stacks[2].grp.rotation.z = Math.sin(tNow * (3 + 6 * mv)) * 0.03 * (0.4 + 0.6 * mv);
   } else if (st.form === 1) {
     stacks[1].grp.position.y = 1 + Math.abs(Math.sin(tNow * 7)) * 0.35;
     stacks[1].grp.rotation.z = Math.sin(tNow * 7) * 0.02;
@@ -897,22 +1022,39 @@ function frame(now) {
 
   updateEnemies(dt);
 
-  // 弾（Z / 弾ボタン長押し）
+  // 武器は形態ごとに別物（戦闘機=連装砲 / 中間形態=ガトリング / ロボット=レーザー）
+  if (st.form !== 2 || st.morph >= 0) { beam.visible = beamGlow.visible = false; }
+  const wantFire = (keys['KeyZ'] || firing) && st.morph < 0;
   st.fireT -= dt;
-  if ((keys['KeyZ'] || firing) && st.morph < 0 && st.fireT <= 0) {
-    st.fireT = 0.085;
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(craft.quaternion);
-    if (st.form === 0) {
+  if (st.gat === undefined) st.gat = 0;
+  if (st.form === 1) {
+    // ガトリング: 撃ち続けると回転が上がって連射が速くなる
+    st.gat = Math.max(0, Math.min(1, st.gat + (wantFire ? dt / 0.8 : -dt / 0.5)));
+    if (wantFire && st.fireT <= 0) {
+      st.fireT = 0.24 - 0.19 * st.gat;
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(craft.quaternion);
+      dir.x += (Math.random() - 0.5) * 0.05; dir.y += (Math.random() - 0.5) * 0.05; dir.z += (Math.random() - 0.5) * 0.05; dir.normalize();
+      _sp.set(0, -0.5, -13); tilt.localToWorld(_sp);
+      fireFrom(bullets, _sp, dir.multiplyScalar(660).add(fwd.clone().multiplyScalar(speed)), 1.3);
+      if (st.gat > 0.6) spawnParticles(_sp, 1, ['#ffc23d'], 6, 0.18, 2, 0);
+    }
+  } else if (st.form === 2) {
+    st.gat = Math.max(0, st.gat - dt / 0.5);
+    updateLaser(dt, wantFire);
+  } else {
+    st.gat = Math.max(0, st.gat - dt / 0.5);
+    if (wantFire && st.fireT <= 0) {
+      st.fireT = 0.085;
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(craft.quaternion);
       const side = (Math.random() < 0.5 ? -7 : 7);
       _sp.set(side, -3, -2);
-    } else if (st.form === 1) _sp.set(0, -0.5, -13);
-    else _sp.set(Math.random() < 0.5 ? -8 : 8, 1, -1);
-    tilt.localToWorld(_sp);
-    fireFrom(bullets, _sp, dir.multiplyScalar(640).add(fwd.clone().multiplyScalar(speed)), 1.3);
+      tilt.localToWorld(_sp);
+      fireFrom(bullets, _sp, dir.multiplyScalar(640).add(fwd.clone().multiplyScalar(speed)), 1.3);
+    }
   }
   // 爆弾（X / 爆弾ボタン）
   st.bombCd -= dt;
-  if (keys['KeyX'] && !prevX) dropBomb();
+  if (keys['KeyX'] && !prevX) subAttack();
   prevX = !!keys['KeyX'];
 
   // 弾の更新
@@ -1076,15 +1218,21 @@ function frame(now) {
 
   // カメラ
   const back = fwd;
+  const effAlt = st.alt + (st.jumpOff || 0);
   let wantPos, wantLook;
   if (st.view === 0) {
-    wantPos = new THREE.Vector3(st.x - back.x * 46, st.alt + 21, st.z - back.z * 46);
-    wantLook = new THREE.Vector3(st.x + back.x * 14, st.alt + 1, st.z + back.z * 14);
+    if (st.form === 2) {
+      wantPos = new THREE.Vector3(st.x - back.x * 40, effAlt + 16, st.z - back.z * 40);
+      wantLook = new THREE.Vector3(st.x + back.x * 10, effAlt + 6, st.z + back.z * 10);
+    } else {
+      wantPos = new THREE.Vector3(st.x - back.x * 46, effAlt + 21, st.z - back.z * 46);
+      wantLook = new THREE.Vector3(st.x + back.x * 14, effAlt + 1, st.z + back.z * 14);
+    }
   } else {
-    wantPos = new THREE.Vector3(st.x, st.alt + 95, st.z + 0.01);
-    wantLook = new THREE.Vector3(st.x, st.alt, st.z);
+    wantPos = new THREE.Vector3(st.x, effAlt + 95, st.z + 0.01);
+    wantLook = new THREE.Vector3(st.x, effAlt, st.z);
   }
-  const k = 1 - Math.exp(-dt * 4.5);
+  const k = 1 - Math.exp(-dt * (st.form === 2 ? 6 : 4.5));
   camPos.lerp(wantPos, k);
   camTarget.lerp(wantLook, k);
   camera.position.copy(camPos);
@@ -1103,7 +1251,14 @@ function frame(now) {
   while (rel < -Math.PI) rel += Math.PI * 2;
   const arrow = ARROWS[((Math.round((rel + Math.PI / 8) / (Math.PI / 4)) % 8) + 8) % 8];
   const shipState = { sail: '航行中', diving: '潜航中', sub: '潜水中', surfacing: '浮上中', sunk: '撃沈!', toRobot: '変形中!', robot: 'ロボット形態', toShip: '変形中!' }[ship.state];
-  hud.textContent = `SPRITE STACK PROTO v0.15 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  if (st.form !== helpForm) {
+    helpForm = st.form;
+    helpEl.textContent = HELP_TEXTS[st.form];
+    document.getElementById('btn5').textContent = st.form === 2 ? '近接' : '爆弾';
+  }
+  const wantJumpBtn = st.form === 2 && st.morph < 0 ? 'block' : 'none';
+  if (btn7El.style.display !== wantJumpBtn) btn7El.style.display = wantJumpBtn;
+  hud.textContent = `SPRITE STACK PROTO v0.17 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
