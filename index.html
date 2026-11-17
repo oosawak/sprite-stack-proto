@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.22 (three.js)</title>
+<title>スプライトスタック試作 v0.23 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -32,9 +32,9 @@
   #cross::after { content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; background: #aef4ff; border-radius: 50%; }
   #joy { position: fixed; left: 16px; bottom: 18px; width: 124px; height: 124px; border-radius: 50%; background: rgba(20,30,50,.35); border: 2px solid rgba(174,244,255,.45); display: none; z-index: 6; touch-action: none; }
   #joyKnob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(174,244,255,.5); border: 2px solid rgba(255,255,255,.6); }
-  @media (pointer: coarse) { #joy { display: block; } #radar { bottom: 158px; } }
+  @media (pointer: coarse) { #joy { display: block; } }
   #radar {
-    position: fixed; left: 10px; bottom: 34px; width: 118px; height: 118px;
+    position: fixed; right: 10px; top: 10px; width: 118px; height: 118px;
     border-radius: 50%; border: 2px solid rgba(140,255,180,0.5); pointer-events: none;
   }
 </style>
@@ -57,7 +57,8 @@
 <div id="joy"><div id="joyKnob"></div></div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.22 (three.js 版) =====
+// ===== スプライトスタック試作 v0.23 (three.js 版) =====
+// v0.23: レーダー（地図）を左下から右上へ移した。スマホで左下のジョイスティックと重なるため。
 // v0.22: ロールが最後まで回らないバグを修正（バンクの追従計算と混ざっていたため、途中で引き戻されていた）。スマホ操作を作り替え: 左下にジョイスティックを追加し、タッチの指の位置では操縦しないようにした（ボタンを押した指の動きや、離した後の残り入力で勝手に左右へ曲がる問題も解消）。
 // v0.21: 高度の動きを形態で変えた。中間形態は垂直にスッと目標高度へ直行し、戦闘機は垂直速度に慣性がついてふわっと遅れて昇降する。
 // v0.20: 戦闘機と中間形態で高度を上げ下げできるようにした（ポインタの上下が操縦桿、↑↓キーでも）。高度は8〜60、HUDにALT表示。
@@ -1370,7 +1371,7 @@ function frame(now) {
   }
   const wantJumpBtn = st.form === 2 && st.morph < 0 ? 'block' : 'none';
   if (btn7El.style.display !== wantJumpBtn) btn7El.style.display = wantJumpBtn;
-  hud.textContent = `SPRITE STACK PROTO v0.22 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  hud.textContent = `SPRITE STACK PROTO v0.23 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
