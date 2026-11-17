@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.17 (three.js)</title>
+<title>スプライトスタック試作 v0.18 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -28,6 +28,8 @@
   #btn5 { right: 118px; bottom: 92px; background: #a83a32; }
   #btn6 { right: 224px; bottom: 92px; background: #2c3e70; }
   #btn7 { right: 12px; bottom: 148px; background: #6a4a9c; display: none; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border: 2px solid rgba(174,244,255,.9); border-radius: 50%; opacity: 0; pointer-events: none; z-index: 5; }
+  #cross::after { content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; background: #aef4ff; border-radius: 50%; }
   #radar {
     position: fixed; left: 10px; bottom: 34px; width: 118px; height: 118px;
     border-radius: 50%; border: 2px solid rgba(140,255,180,0.5); pointer-events: none;
@@ -48,9 +50,11 @@
 <div id="btn2" class="btn">ロール</div>
 <div id="btn" class="btn">変形</div>
 <div id="btn7" class="btn">跳</div>
+<div id="cross"></div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.17 (three.js 版) =====
+// ===== スプライトスタック試作 v0.18 (three.js 版) =====
+// v0.18: ロボット形態ではカメラがゆっくり頭の位置へ寄ってFPSになり、画面中央にレーザー用の照準が出る。照準の上下はポインタ/↑↓で動き、レーザーは照準の方向へ飛ぶ。他形態へ変形すると追跡視点へ戻る。レーザーのビームを太く明るくし、銃も大きくした（v0.17で見えにくかったため）。
 // v0.17: 武器を形態ごとに別物にした（戦闘機=連装砲、中間形態=ガトリング（撃ち続けると連射加速）、ロボット=右手のレーザー銃（熱管理つき））。ロボット専用に垂直ジャンプ（C/跳ボタン）と近接攻撃（X/近接ボタン、爆弾と切替）を追加。マウスクリックは攻撃に変更（変形はT/ダブルクリック/タッチのタップ）。
 // v0.16: ロボット形態では機体を傾けず、まっすぐ立ったまま向きが変わるようにした。カメラもロボット形態では少し低く近づき、背後へしっかりつく。中間形態は傾き控えめに。止まっているロボットの揺れは静かなホバー調に。
 // v0.16: ロボット形態では機体を傾けず、まっすぐ立ったまま向きが変わるようにした。カメラもロボット形態では少し低く近づき、背後へしっかりつく。中間形態は傾き控えめに。止まっているロボットの揺れは静かなホバー調に。
@@ -358,16 +362,16 @@ const gunTip = new THREE.Object3D();
   const dark = new THREE.MeshLambertMaterial({ color: '#2c313a' });
   const mid = new THREE.MeshLambertMaterial({ color: '#4a5462' });
   const tipM = new THREE.MeshBasicMaterial({ color: '#7fe7ff' });
-  const b1 = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.4, 5.5), dark); b1.castShadow = true;
-  const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 5), mid); b2.position.set(0, 0.4, -4.5);
-  const b3 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.9), tipM); b3.position.set(0, 0.4, -7.2);
-  gunTip.position.set(0, 0.4, -7.7);
+  const b1 = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3, 7), dark); b1.castShadow = true;
+  const b2 = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 6), mid); b2.position.set(0, 0.5, -5.5);
+  const b3 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 1.1), tipM); b3.position.set(0, 0.5, -8.6);
+  gunTip.position.set(0, 0.5, -9.3);
   gunGrp.add(b1, b2, b3, gunTip);
-  gunGrp.position.set(8.6, 0.2, -2.5);
+  gunGrp.position.set(9.2, 0.2, -2);
   stacks[2].grp.add(gunGrp);
 }
-const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 1, 6, 1, true), new THREE.MeshBasicMaterial({ color: '#aef4ff', transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
-const beamGlow = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 1, 6, 1, true), new THREE.MeshBasicMaterial({ color: '#23aff0', transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 1, 8, 1, true), new THREE.MeshBasicMaterial({ color: '#e8fbff', transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false }));
+const beamGlow = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 1, 8, 1, true), new THREE.MeshBasicMaterial({ color: '#23aff0', transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
 beam.visible = beamGlow.visible = false;
 scene.add(beam, beamGlow);
 const _muzzle = new THREE.Vector3(), _bd = new THREE.Vector3(), _tp = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
@@ -766,11 +770,12 @@ bindBtn('btn4', null, true);
 bindBtn('btn5', subAttack);
 bindBtn('btn7', tryJump);
 const helpEl = document.getElementById('help');
+const crossEl = document.getElementById('cross');
 const btn7El = document.getElementById('btn7');
 const HELP_TEXTS = [
   'Z / クリック長押し: 攻撃 ・ X: 爆弾 ・ T / ダブルクリック / タップ: 変形 ・ R: ROLL ・ V: VIEW ・ N: NIGHT ・ 長押し: BOOST',
   'Z / クリック長押し: ガトリング（撃ち続けると連射が速くなる） ・ X: 爆弾 ・ T: 変形 ・ Space / 画面長押し: 移動（離すと停止） ・ その場で回転できる',
-  'Z / クリック長押し: レーザー（熱で止まる） ・ X: 近接攻撃 ・ C / 跳: ジャンプ ・ T: 変形 ・ Space / 画面長押し: 移動（離すと停止）',
+  'Z / クリック長押し: レーザー（熱で止まる） ・ マウス上下 / ↑↓: 照準 ・ X: 近接攻撃 ・ C / 跳: ジャンプ ・ T: 変形 ・ Space / 画面長押し: 移動（離すと停止）',
 ];
 let helpForm = -1;
 bindBtn('btn6', () => { st.nightTarget = 1 - st.nightTarget; });
@@ -804,7 +809,9 @@ function updateLaser(dt, wantFire) {
   else { st.heat = Math.max(0, st.heat - dt / 1.6); if (st.over && st.heat < 0.35) st.over = false; }
   if (!active) { beam.visible = beamGlow.visible = false; st.laserTick = 0; return; }
   gunTip.getWorldPosition(_muzzle);
-  _bd.copy(craftForward());
+  const cp = Math.cos(st.aimPitch || 0), spp = Math.sin(st.aimPitch || 0);
+  _bd.set(Math.cos(st.angle) * cp, spp, Math.sin(st.angle) * cp);
+  spawnParticles(_muzzle, 1, ['#aef4ff', '#ffffff'], 5, 0.15, 3, 0);
   let best = 430, hitE = null, hitShipFlag = false;
   for (const e of enemies) {
     if (!e.alive) continue;
@@ -1022,6 +1029,17 @@ function frame(now) {
 
   updateEnemies(dt);
 
+  // 照準の上下（ロボットのレーザー用）
+  if (st.aimPitch === undefined) st.aimPitch = 0;
+  if (st.form === 2) {
+    if (pointer && tNow - lastInput < 6) {
+      const tp = Math.max(-0.85, Math.min(0.85, (0.5 - pointer.y) * 1.1));
+      st.aimPitch += (tp - st.aimPitch) * Math.min(1, dt * 8);
+    }
+    if (keys['ArrowUp']) st.aimPitch = Math.min(0.85, st.aimPitch + dt * 1.3);
+    if (keys['ArrowDown']) st.aimPitch = Math.max(-0.85, st.aimPitch - dt * 1.3);
+  }
+
   // 武器は形態ごとに別物（戦闘機=連装砲 / 中間形態=ガトリング / ロボット=レーザー）
   if (st.form !== 2 || st.morph >= 0) { beam.visible = beamGlow.visible = false; }
   const wantFire = (keys['KeyZ'] || firing) && st.morph < 0;
@@ -1232,6 +1250,18 @@ function frame(now) {
     wantPos = new THREE.Vector3(st.x, effAlt + 95, st.z + 0.01);
     wantLook = new THREE.Vector3(st.x, effAlt, st.z);
   }
+  // ロボット形態では頭の位置へゆっくり寄ってFPSになる。他形態では追跡視点へ戻る
+  if (st.camBlend === undefined) st.camBlend = 0;
+  const camTarget2 = (st.form === 2 && st.view === 0) ? 1 : 0;
+  st.camBlend += (camTarget2 - st.camBlend) * Math.min(1, dt * 2.2);
+  if (st.camBlend > 0.01) {
+    const cp2 = Math.cos(st.aimPitch || 0), sp3 = Math.sin(st.aimPitch || 0);
+    const aim = new THREE.Vector3(fwd.x * cp2, sp3, fwd.z * cp2);
+    const headPos = new THREE.Vector3(st.x + fwd.x * 5, effAlt + 21.5, st.z + fwd.z * 5);
+    wantPos.lerp(headPos, st.camBlend);
+    wantLook.lerp(headPos.clone().addScaledVector(aim, 120), st.camBlend);
+  }
+  crossEl.style.opacity = st.camBlend.toFixed(2);
   const k = 1 - Math.exp(-dt * (st.form === 2 ? 6 : 4.5));
   camPos.lerp(wantPos, k);
   camTarget.lerp(wantLook, k);
@@ -1258,7 +1288,7 @@ function frame(now) {
   }
   const wantJumpBtn = st.form === 2 && st.morph < 0 ? 'block' : 'none';
   if (btn7El.style.display !== wantJumpBtn) btn7El.style.display = wantJumpBtn;
-  hud.textContent = `SPRITE STACK PROTO v0.17 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 0 ? 'CHASE' : 'TOP'}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  hud.textContent = `SPRITE STACK PROTO v0.18 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
