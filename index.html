@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>スプライトスタック試作 v0.27 (three.js)</title>
+<title>スプライトスタック試作 v0.28 (three.js)</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #123; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; image-rendering: pixelated; touch-action: none; }
@@ -34,6 +34,8 @@
   #joyKnob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(174,244,255,.5); border: 2px solid rgba(255,255,255,.6); }
   @media (pointer: coarse) { #joy { display: block; } }
   body.wp #hud, body.wp #help, body.wp .btn, body.wp #joy, body.wp #radar, body.wp #cross { display: none !important; }
+  #banner { position: fixed; left: 50%; bottom: 9%; transform: translateX(-50%); padding: 10px 26px; background: rgba(8,12,24,.55); color: #eaf6ff; font-size: 19px; letter-spacing: .14em; border: 1px solid rgba(174,244,255,.35); border-radius: 6px; opacity: 0; transition: opacity .8s; pointer-events: none; z-index: 7; display: none; white-space: nowrap; }
+  body.wp #banner { display: block; }
   #radar {
     position: fixed; right: 10px; top: 10px; width: 118px; height: 118px;
     border-radius: 50%; border: 2px solid rgba(140,255,180,0.5); pointer-events: none;
@@ -56,9 +58,11 @@
 <div id="btn7" class="btn">跳</div>
 <div id="cross"></div>
 <div id="joy"><div id="joyKnob"></div></div>
+<div id="banner"></div>
 <script type="module">
 import * as THREE from 'three';
-// ===== スプライトスタック試作 v0.27 (three.js 版) =====
+// ===== スプライトスタック試作 v0.28 (three.js 版) =====
+// v0.28: 壁紙モードに自動ミッションを追加。時間が来ると「ミッション ― 敵機を迎撃せよ／戦艦を撃沈せよ」の帯が出て、自機が自律的に出撃・解決し、哨戒に戻る。操作すると30秒だけ手動操縦に切り替わる（たまに遊べる壁紙）。
 // v0.27: 壁紙モード（#wallpaper）を追加。UIを全部隠し、自動操縦で飛び続け、昼夜は本当の時計と連動し、約24秒ごとに自動で変形する。30fpsに抑えて負荷を下げてある。Wallpaper EngineやLively Wallpaper等のWeb壁紙として使える。
 // v0.26: ロボットのFPSカメラを、少し後ろ・上から頭が画面下に映る位置にし、向きも少し下向きにした（足元側が見やすくなる）。ガードの盾が見えなかったので、濃さと網目を足し、敵弾を受けた瞬間に光るようにした。
 // v0.25: ロボットのジャンプを垂直から後方ジャンプに変更。FPSでは足元の敵が見えず、真上に跳んでも見えないため、後ろへ跳んで距離を取り、足元の敵を視界に入れる動きにした。
@@ -755,6 +759,7 @@ if (location.hash === '#top') st.view = 1;
 if (location.hash === '#night') { st.nightTarget = 1; st.night = 1; }
 enemies.push(makeEnemy(0), makeEnemy(1), makeEnemy(2));
 let pointer = null, pressing = false, pressAt = 0, lastInput = -10, firing = false, prevX = false, pressType = 'touch', pointerFromJoy = false;
+let wpWant = null;
 const keys = {};
 addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') return; // スマホの操縦はジョイスティックだけにする（指の位置で勝手に曲がらないように）
@@ -841,6 +846,61 @@ function startMorph() {
   stacks.forEach(s => s.grp.visible = false);
   morphMesh.visible = true;
   updateMorphMesh(0);
+}
+const bannerEl = document.getElementById('banner');
+let bannerUntil = 0;
+function showBanner(text, dur) {
+  if (!bannerEl) return;
+  bannerEl.textContent = text;
+  bannerEl.style.opacity = 1;
+  bannerUntil = tNow + (dur || 4);
+}
+function updateMission(dt) {
+  // 壁紙モードの自動ミッション: 発令 → 自律的に解決 → 哨戒に戻る
+  if (bannerEl && bannerUntil && tNow > bannerUntil) { bannerEl.style.opacity = 0; bannerUntil = 0; }
+  const m = st.mission;
+  if (!m) {
+    wpWant = null;
+    if (tNow >= (st.nextMission || 0)) {
+      const type = Math.random() < 0.55 ? 'enemy' : 'ship';
+      st.mission = { type, t: 0, target: null };
+      showBanner(type === 'enemy' ? 'ミッション ― 敵機を迎撃せよ' : 'ミッション ― 戦艦を撃沈せよ', 4.5);
+    }
+    return;
+  }
+  m.t += dt;
+  let tx = 0, tz = 0, tAlt = 20, done = false, valid = true;
+  if (m.type === 'enemy') {
+    if (!m.target || !m.target.alive) {
+      m.target = enemies.find(e => e.alive) || null;
+      if (!m.target) done = true;
+    }
+    if (m.target) { tx = m.target.x; tz = m.target.z; tAlt = m.target.alt; }
+  } else {
+    if (ship.state === 'sunk') done = true;
+    tx = ship.x; tz = ship.z; tAlt = 14;
+    if (ship.state === 'diving' || ship.state === 'sub') valid = false;
+  }
+  if (done || m.t > 80) {
+    if (done) showBanner('ミッション完了', 3.5);
+    st.mission = null; st.nextMission = tNow + 45 + Math.random() * 40;
+    firing = false; wpWant = null;
+    return;
+  }
+  if (st.form !== 0) { // 戦闘機の姿で挑む
+    if (st.morph < 0) startMorph();
+    wpWant = null; firing = false;
+    return;
+  }
+  if (!valid) { wpWant = null; firing = false; return; }
+  const dx = tx - st.x, dz = tz - st.z;
+  const dist = Math.hypot(dx, dz);
+  wpWant = Math.atan2(dz, dx);
+  st.altT = tAlt;
+  let dA = wpWant - st.angle;
+  while (dA > Math.PI) dA -= Math.PI * 2;
+  while (dA < -Math.PI) dA += Math.PI * 2;
+  firing = Math.abs(dA) < 0.16 && dist < 430;
 }
 function startRoll() {
   if (st.morph >= 0) return;
@@ -1025,11 +1085,15 @@ function frame(now) {
   }
   const dt = Math.min(0.05, (now - last) / 1000); last = now; tNow = now / 1000;
   if (WP) {
-    lastInput = -10; // 常に自動操縦
     const h = new Date().getHours() + new Date().getMinutes() / 60;
     st.nightTarget = (h >= 18.5 || h < 6) ? 1 : 0; // 昼夜は本当の時計と連動
-    if (st.wpMorphT === undefined) st.wpMorphT = tNow;
-    if (st.morph < 0 && tNow - st.wpMorphT > 24) { st.wpMorphT = tNow; startMorph(); } // たまに変形する
+    if (st.wpMorphT === undefined) { st.wpMorphT = tNow; st.nextMission = tNow + 18; }
+    const manual = lastInput > 0 && tNow - lastInput < 30; // 最近の操作があれば手動優先（たまに遊べる壁紙）
+    if (manual && !st.wpManualPrev) showBanner('手動操縦中', 3);
+    st.wpManualPrev = manual;
+    if (!manual) updateMission(dt);
+    else { wpWant = null; if (st.mission) firing = false; }
+    if (!st.mission && !manual && st.morph < 0 && tNow - st.wpMorphT > 35) { st.wpMorphT = tNow; startMorph(); } // 哨戒中はたまに変形
   }
 
   // 操縦
@@ -1037,6 +1101,7 @@ function frame(now) {
   const steerGain = st.form === 1 ? 2.0 : st.form === 2 ? 1.3 : 1.0;
   if (pointer && tNow - lastInput < 3) want = st.angle + (pointer.x - 0.5) * 2.2 * dt * 3 * steerGain;
   else want = st.angle + Math.sin(tNow * 0.5) * 0.3 * dt;
+  if (wpWant !== null) want = wpWant; // 壁紙ミッションの自動操縦
   const dc = Math.hypot(st.x, st.z);
   if (dc > 2200) want = Math.atan2(-st.z, -st.x);
   let diff = want - st.angle;
@@ -1439,7 +1504,7 @@ function frame(now) {
   }
   const wantJumpBtn = st.form === 2 && st.morph < 0 ? 'block' : 'none';
   if (btn7El.style.display !== wantJumpBtn) btn7El.style.display = wantJumpBtn;
-  hud.textContent = `SPRITE STACK PROTO v0.27 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}${st.dodgeT > 0 ? '  DODGE!' : ''}${guardingNow ? '  GUARD' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
+  hud.textContent = `SPRITE STACK PROTO v0.28 (three.js)\nFORM: ${FORM_NAMES[st.form]}${boosting ? (st.form === 0 ? '  BOOST!' : '  MOVE') : ''}${st.form > 0 && speed < 4 && st.morph < 0 ? '  STOP' : ''}${st.form < 2 ? '  ALT ' + Math.round(st.alt) : ''}${st.form === 2 ? '  HEAT ' + '▮'.repeat(Math.round((st.heat || 0) * 8)) + (st.over ? ' OVER!' : '') : ''}${st.roll >= 0 ? '  ROLL!' : ''}${st.dodgeT > 0 ? '  DODGE!' : ''}${guardingNow ? '  GUARD' : ''}  VIEW: ${st.view === 1 ? 'TOP' : (st.form === 2 ? 'FPS' : 'CHASE')}  ${nf > 0.5 ? 'NIGHT' : 'DAY'}\nSHIP: ${shipState} HP ${'♥'.repeat(Math.max(0, ship.hp))}  ${arrow} ${sDist}m  ENEMY: ${enemies.filter(e => e.alive).length}`;
   drawRadar();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
