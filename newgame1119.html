@@ -1,0 +1,2108 @@
+<!--
+複数機体からの選択・僚機との同時出動、そして合体ゲージ＆大型スーパーロボへの合体システムを実装しました！
+
+追加された新要素
+
+1.  3種類の個性的な可変戦闘機から選択＆僚機として同時出動
+
+      - タイトル画面で ←→ / A・D（または 1・2・3キー / カードクリック）で自機を選択できます。
+      - 選ばなかった残りの2機はAI僚機として一緒に出動し、変形しながら敵機や大型艦を攻撃して援護してくれます。
+          - VX-07 蒼燕（バランス・高機動型）：旋回・速度・火力のバランスが良い標準機。
+          - VX-09 紅鷹（高速・重火力型）：最高速が速く、全武装の攻撃力が 1.28倍（耐久はやや低め）。
+          - VX-05 翠盾（重装甲・防衛型）：最大HPが 145 と高く、レーザーの熱上昇も緩やかなタフ仕様。
+
+2.  合体ゲージ＆大型スーパーロボ（Gキー）
+
+      - 敵への攻撃命中・撃墜・時間経過で右下の**「合体ゲージ」**が溜まります（100%で発光）。
+      - Gキーを押すと僚機2機が自機へ急速収束し、蒼・紅・翠・黄金の装甲をまとった**約2倍サイズの「超合体ロボ（アズール・カイザー）」**へと合体します！（約20秒間）
+      - スーパーロボの能力：
+          - 耐久大幅強化（被ダメ75%カット＋合体時HP25回復）
+          - Z（主武装）：熱ゲージなし・連射可能な超極太ハイパー・メガ粒子砲
+          - X（副武装）：広範囲・超高威力の必殺ギガブレード斬撃
+          - F（斉射）：クールダウン即リセット＋8連装ハイパーミサイル
+          - R（防御）：全方位に衝撃波を放ち周囲の敵弾を消去
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>蒼穹の可変翼 ― アズール・シフト</title>
+<style>
+  * { box-sizing: border-box; user-select: none; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #071324;
+    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
+    color: #e2f1ff;
+  }
+  #game-canvas { display: block; width: 100%; height: 100%; }
+  #overlay-2d {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+  .screen {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(6, 16, 32, 0.58);
+    backdrop-filter: blur(2px);
+    pointer-events: auto;
+    padding: 18px;
+    text-align: center;
+  }
+  .hidden { display: none !important; }
+
+  h1.title-logo {
+    font-size: clamp(24px, 4.2vw, 48px);
+    letter-spacing: 0.12em;
+    margin: 0 0 4px;
+    color: #7dd3fc;
+    text-shadow: 0 0 22px rgba(56, 189, 248, 0.75);
+  }
+  .subtitle {
+    font-size: 14px; letter-spacing: 0.2em;
+    color: #bae6fd; margin-bottom: 14px;
+  }
+  .panel {
+    background: rgba(12, 27, 50, 0.86);
+    border: 1px solid rgba(125, 211, 252, 0.4);
+    border-radius: 10px;
+    padding: 14px 20px;
+    max-width: 840px; width: 94%;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  }
+  .fighter-select-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .fighter-card {
+    background: rgba(15, 35, 66, 0.8);
+    border: 2px solid rgba(148, 163, 184, 0.35);
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .fighter-card.selected {
+    border-color: #fde047;
+    background: rgba(30, 58, 108, 0.92);
+    box-shadow: 0 0 16px rgba(250, 204, 21, 0.35);
+    transform: translateY(-2px);
+  }
+  .fighter-name { font-size: 15px; font-weight: bold; color: #fff; }
+  .fighter-role { font-size: 11px; font-weight: bold; margin: 2px 0 5px; }
+  .fighter-desc { font-size: 11.5px; color: #cbd5e1; line-height: 1.4; }
+
+  .controls-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
+    gap: 6px 14px;
+    text-align: left;
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 8px;
+  }
+  .key-badge {
+    display: inline-block;
+    background: #1e3a5f;
+    border: 1px solid #60a5fa;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-weight: bold;
+    color: #fff;
+    font-size: 11px;
+    margin-right: 4px;
+  }
+  .blink-prompt {
+    margin-top: 14px;
+    font-size: 19px;
+    font-weight: bold;
+    color: #fde047;
+    letter-spacing: 0.12em;
+    animation: pulse 1.2s infinite ease-in-out;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.98); }
+  }
+
+  /* HUD */
+  #hud { position: absolute; inset: 0; pointer-events: none; }
+  .hud-box {
+    position: absolute;
+    background: rgba(8, 20, 38, 0.7);
+    border: 1px solid rgba(125, 211, 252, 0.35);
+    border-radius: 6px;
+    padding: 10px 14px;
+  }
+  #hud-tl { top: 14px; left: 14px; min-width: 265px; }
+  #hud-tr { top: 14px; right: 14px; text-align: right; min-width: 210px; }
+  #hud-top-center {
+    top: 14px; left: 50%; transform: translateX(-50%);
+    min-width: 360px; max-width: 520px; width: 42%;
+    text-align: center;
+  }
+  #hud-br { bottom: 52px; right: 14px; min-width: 240px; }
+  #hud-help {
+    position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+    background: rgba(8, 20, 38, 0.82);
+    border: 1px solid rgba(125, 211, 252, 0.35);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    white-space: nowrap;
+    max-width: 96vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar-bg {
+    width: 100%; height: 10px;
+    background: rgba(255,255,255,0.12);
+    border-radius: 4px; overflow: hidden; margin-top: 4px;
+  }
+  .bar-fill {
+    height: 100%; width: 100%;
+    transition: width 0.08s linear;
+  }
+  #hp-fill { background: linear-gradient(90deg, #22c55e, #4ade80); }
+  #boss-hp-fill { background: linear-gradient(90deg, #ef4444, #f97316); }
+  #heat-fill { background: linear-gradient(90deg, #38bdf8, #f59e0b, #ef4444); width: 0%; }
+  #combine-fill { background: linear-gradient(90deg, #38bdf8, #a855f7, #fde047); width: 0%; }
+
+  #radio-box {
+    position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%);
+    background: rgba(6, 18, 36, 0.86);
+    border-left: 4px solid #38bdf8;
+    border-right: 1px solid rgba(56, 189, 248, 0.4);
+    border-top: 1px solid rgba(56, 189, 248, 0.4);
+    border-bottom: 1px solid rgba(56, 189, 248, 0.4);
+    padding: 8px 18px;
+    border-radius: 4px;
+    font-size: 14px;
+    max-width: 640px;
+    text-align: center;
+  }
+  #banner-center {
+    position: absolute; top: 32%; left: 50%; transform: translate(-50%, -50%);
+    font-size: clamp(24px, 4vw, 44px);
+    font-weight: bold;
+    letter-spacing: 0.14em;
+    color: #fde047;
+    text-shadow: 0 0 18px rgba(0,0,0,0.9), 0 0 14px rgba(250,204,21,0.5);
+    text-align: center;
+    white-space: pre-line;
+  }
+  .rank-badge {
+    font-size: 64px; font-weight: 900;
+    color: #fde047;
+    text-shadow: 0 0 24px rgba(250, 204, 21, 0.7);
+    margin: 4px 0;
+  }
+  table.result-table {
+    width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 15px;
+  }
+  table.result-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.12); }
+  table.result-table td:last-child { text-align: right; font-weight: bold; color: #7dd3fc; }
+  .warn-text { color: #f87171; font-weight: bold; }
+  .ok-text { color: #4ade80; font-weight: bold; }
+  .ready-gold { color: #fde047; font-weight: bold; animation: pulse 0.8s infinite; }
+</style>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<canvas id="overlay-2d"></canvas>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="hud-tl" class="hud-box">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span id="hud-unit-name" style="font-weight:bold; color:#7dd3fc;">VX-07 蒼燕</span>
+      <span id="hud-mode" style="background:#0284c7; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:bold;">戦闘機</span>
+    </div>
+    <div style="font-size:12px; margin-top:6px; display:flex; justify-content:space-between;">
+      <span>機体耐久 (HP)</span>
+      <span id="hud-hp-text">100 / 100</span>
+    </div>
+    <div class="bar-bg"><div id="hp-fill" class="bar-fill"></div></div>
+    <div style="font-size:12px; margin-top:7px; color:#bae6fd;" id="hud-mission-mini">目標: 敵部隊の迎撃</div>
+    <div style="font-size:11.5px; margin-top:3px; color:#86efac;" id="hud-wingmen">僚機: 2機 随伴中</div>
+    <div style="font-size:12px; margin-top:3px; display:flex; justify-content:space-between;">
+      <span>視点: <b id="hud-cam">CHASE</b> (V)</span>
+      <span id="hud-state-badge" style="color:#fde047;"></span>
+    </div>
+  </div>
+
+  <div id="hud-top-center" class="hud-box hidden">
+    <div style="font-size:13px; font-weight:bold; color:#fca5a5; letter-spacing:0.08em;">
+      大型強襲艦「クジラ級」 ― 弱点：中央発光コア
+    </div>
+    <div class="bar-bg" style="height:14px;"><div id="boss-hp-fill" class="bar-fill"></div></div>
+    <div style="font-size:11px; margin-top:3px; color:#fecaca;" id="boss-hp-text">コア耐久: 100%</div>
+  </div>
+
+  <div id="hud-tr" class="hud-box">
+    <div style="font-size:12px; color:#93c5fd;">残り時間</div>
+    <div id="hud-timer" style="font-size:22px; font-weight:bold; letter-spacing:0.06em;">05:00</div>
+    <div style="font-size:13px; margin-top:4px;">SCORE: <b id="hud-score" style="color:#fde047;">0</b></div>
+    <div style="font-size:12px; margin-top:2px;" id="hud-wave-info">WAVE 1 / 敵残数: 3</div>
+  </div>
+
+  <div id="hud-br" class="hud-box">
+    <div style="font-size:12px; display:flex; justify-content:space-between;">
+      <span>一斉ミサイル [F]</span>
+      <span id="hud-missile-cd" class="ok-text">READY</span>
+    </div>
+    <div style="font-size:12px; display:flex; justify-content:space-between; margin-top:4px;">
+      <span id="hud-def-label">バレルロール [R]</span>
+      <span id="hud-def-cd" class="ok-text">READY</span>
+    </div>
+    <div style="margin-top:6px;">
+      <div style="font-size:11.5px; display:flex; justify-content:space-between;">
+        <span id="hud-combine-label">合体ゲージ</span>
+        <span id="hud-combine-text">0%</span>
+      </div>
+      <div class="bar-bg" style="height:9px;"><div id="combine-fill" class="bar-fill"></div></div>
+    </div>
+    <div id="hud-heat-wrap" class="hidden" style="margin-top:6px;">
+      <div style="font-size:11px; display:flex; justify-content:space-between;">
+        <span>レーザー熱量</span>
+        <span id="hud-heat-status">0%</span>
+      </div>
+      <div class="bar-bg" style="height:8px;"><div id="heat-fill" class="bar-fill"></div></div>
+    </div>
+  </div>
+
+  <div id="radio-box" class="hidden"></div>
+  <div id="banner-center" class="hidden"></div>
+  <div id="hud-help"></div>
+</div>
+
+<!-- タイトル画面 -->
+<div id="screen-title" class="screen">
+  <h1 class="title-logo">蒼穹の可変翼 ― アズール・シフト</h1>
+  <div class="subtitle">3機編成・合体戦術アクション</div>
+  <div class="panel">
+    <div style="font-size:13px; color:#fde047; margin-bottom:8px; font-weight:bold;">
+      出撃機体を選択してください（←→ / 1・2・3 / クリック） ― 選ばなかった2機は僚機として随伴します
+    </div>
+    <div class="fighter-select-row" id="fighter-cards"></div>
+    <div class="controls-grid">
+      <div><span class="key-badge">←→ / A D</span> 旋回 (タイトル時は機体選択)</div>
+      <div><span class="key-badge">↑↓</span> 高度上下 (ロボット時は照準上下)</div>
+      <div><span class="key-badge">Space</span> ブースト / スラスター前進</div>
+      <div><span class="key-badge">T</span> 3形態変形 (戦闘機→中間形態→ロボット)</div>
+      <div><span class="key-badge">Z / X</span> 主武装 / 爆弾・近接攻撃</div>
+      <div><span class="key-badge">F / G</span> ミサイル斉射 / <b>超合体(ゲージ100%)</b></div>
+      <div><span class="key-badge">R / C</span> 防御・回避 / 後方ジャンプ(ロボット)</div>
+      <div><span class="key-badge">V / P</span> カメラ切替 / 一時停止</div>
+    </div>
+  </div>
+  <div class="blink-prompt">▶ Enter キーで3機編隊出撃 ◀</div>
+</div>
+
+<!-- ミッション提示画面 -->
+<div id="screen-briefing" class="screen hidden">
+  <div class="panel" style="max-width:620px;">
+    <div style="color:#38bdf8; font-weight:bold; letter-spacing:0.15em; margin-bottom:8px;">MISSION BRIEFING</div>
+    <h2 style="margin:0 0 14px; color:#fff;">作戦名：蒼海防衛線</h2>
+    <p style="font-size:15.5px; line-height:1.7; color:#e0f2fe; margin:0 0 14px;">
+      僚機2機とともに敵の可変戦闘機部隊を撃墜し、<br>
+      最後に現れる大型強襲艦の弱点コアを破壊せよ。<br>
+      合体ゲージが100%に達したら <b>[G]キー</b> で大型スーパーロボへ合体可能！
+    </p>
+    <div id="briefing-radio" style="background:rgba(2,132,199,0.22); border:1px solid #38bdf8; border-radius:6px; padding:12px; font-size:14px; text-align:left;"></div>
+    <div class="blink-prompt" style="font-size:17px;">Enter で発進（まもなく自動発進します）</div>
+  </div>
+</div>
+
+<!-- 一時停止画面 -->
+<div id="screen-pause" class="screen hidden">
+  <div class="panel" style="max-width:420px;">
+    <h2 style="margin:0 0 12px; color:#7dd3fc;">PAUSE ― 一時停止中</h2>
+    <p style="font-size:14px; color:#cbd5e1;">P キーで戦闘を再開します</p>
+    <p style="font-size:13px; color:#94a3b8;">Enter キーでタイトル画面に戻ります</p>
+  </div>
+</div>
+
+<!-- 結果表示画面 -->
+<div id="screen-result" class="screen hidden">
+  <div class="panel" style="max-width:540px;">
+    <div id="result-status" style="font-size:18px; font-weight:bold; letter-spacing:0.15em;">MISSION COMPLETE</div>
+    <div class="rank-badge" id="result-rank">S</div>
+    <table class="result-table">
+      <tr><td>撃墜数スコア (<span id="res-kills">0</span>機)</td><td id="res-kill-score">0</td></tr>
+      <tr><td>大型艦撃沈ボーナス</td><td id="res-boss-bonus">0</td></tr>
+      <tr><td>残り時間ボーナス (<span id="res-time">0</span>秒)</td><td id="res-time-bonus">0</td></tr>
+      <tr><td>被ダメージ減点 (<span id="res-dmg">0</span>pt)</td><td id="res-dmg-penalty" style="color:#f87171;">0</td></tr>
+      <tr style="font-size:18px; border-top:2px solid #38bdf8;">
+        <td><b>合計スコア</b></td><td id="res-total" style="color:#fde047;">0</td>
+      </tr>
+    </table>
+    <div id="result-comment" style="font-size:14px; color:#bae6fd; margin:10px 0;"></div>
+    <div class="blink-prompt" style="font-size:17px; margin-top:12px;">
+      Enter：そのまま再出撃 ／ T：タイトルへ戻る
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  if (typeof THREE === 'undefined') {
+    alert('Three.js の読み込みに失敗しました。ネットワーク接続を確認してください。');
+    return;
+  }
+
+  // =========================================================================
+  // 1. 調整用定数 & 機体バリエーション定義
+  // =========================================================================
+  const ANIM_CONFIG = {
+    hoverBobSpeed: 3.1,
+    hoverBobAmp: 0.22,
+    idleRollSpeed: 1.7,
+    idleRollAmp: 0.025,
+    idlePitchSpeed: 2.2,
+    idlePitchAmp: 0.02,
+    wingTipLagLerp: 0.12,
+    wingTipFlexAmount: 0.35,
+    thrusterFlickerSpeed: 38.0,
+    thrusterBaseLen: 0.85,
+    thrusterBoostLen: 1.95,
+    flapDeflectAngle: 0.32,
+    midLegSwingAmp: 0.32,
+    midLegVelFactor: 0.012,
+    gatlingRecoilAmp: 0.28,
+    gatlingRecoilFreq: 42.0,
+    robotGravity: 44.0,
+    robotFootOffset: 1.9,
+    robotWalkSpeed: 10.5,
+    robotLegSwingAmp: 0.52,
+    robotArmSwingAmp: 0.38,
+    robotWalkBobAmp: 0.16,
+    robotThrustLean: 0.16,
+    robotHeadYawAmp: 0.35,
+    robotHeadPitchAmp: 0.5,
+    robotGunAimPitchFactor: 0.85,
+    laserRecoilPush: 0.42,
+    jumpSquatDecay: 4.8,
+    jumpSquatDepth: 0.65,
+    landShakeFactor: 0.032,
+    shipBobAmp: 0.45,
+    shipBobSpeed: 0.9,
+    enemyBankFactor: 0.7
+  };
+
+  const FIGHTER_TYPES = [
+    {
+      id: 0,
+      name: 'VX-07 蒼燕',
+      role: 'バランス・高機動型',
+      roleColor: '#38bdf8',
+      desc: '全形態で扱いやすく旋回性能に優れた標準機。安定した連装砲と高精度レーザーを持つ。',
+      speedMul: 1.0,
+      turnMul: 1.05,
+      dmgMul: 1.0,
+      maxHp: 105,
+      heatMul: 1.0,
+      palette: { main: 0xeef4ff, accent: 0x0284c7, dark: 0x1e293b, visor: 0xf59e0b, glow: 0x38bdf8 }
+    },
+    {
+      id: 1,
+      name: 'VX-09 紅鷹',
+      role: '高速・重火力型',
+      roleColor: '#f87171',
+      desc: '最高速度と全武装の威力(1.28倍)に特化した突撃機。旋回はやや重いが圧倒的火力を誇る。',
+      speedMul: 1.18,
+      turnMul: 0.9,
+      dmgMul: 1.28,
+      maxHp: 90,
+      heatMul: 1.15,
+      palette: { main: 0xdc2626, accent: 0xfacc15, dark: 0x18181b, visor: 0x38bdf8, glow: 0xfb923c }
+    },
+    {
+      id: 2,
+      name: 'VX-05 翠盾',
+      role: '重装甲・防衛型',
+      roleColor: '#4ade80',
+      desc: '耐久力145の重装甲と低発熱レーザーを搭載。被弾に強く、前線での粘り強い戦いに向く。',
+      speedMul: 0.93,
+      turnMul: 0.96,
+      dmgMul: 0.95,
+      maxHp: 145,
+      heatMul: 0.65,
+      palette: { main: 0x10b981, accent: 0xf1f5f9, dark: 0x0f172a, visor: 0xfde047, glow: 0x34d399 }
+    }
+  ];
+
+  let selectedFighterIdx = 0;
+
+  // =========================================================================
+  // 2. 簡易シンセ効果音
+  // =========================================================================
+  class SoundFX {
+    constructor() { this.ctx = null; this.enabled = true; }
+    init() {
+      if (this.ctx) {
+        if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+        return;
+      }
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) { try { this.ctx = new AC(); } catch (e) { this.enabled = false; } }
+    }
+    tone(f1, f2, dur, type = 'square', vol = 0.06) {
+      if (!this.enabled || !this.ctx) return;
+      try {
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(f1, t);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t + dur);
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        osc.connect(gain); gain.connect(this.ctx.destination);
+        osc.start(t); osc.stop(t + dur);
+      } catch (e) {}
+    }
+    shoot() { this.tone(680, 220, 0.07, 'square', 0.04); }
+    gatling() { this.tone(420, 140, 0.045, 'sawtooth', 0.03); }
+    laser() { this.tone(920, 180, 0.22, 'sawtooth', 0.06); }
+    superBeam() { this.tone(1100, 140, 0.32, 'sawtooth', 0.09); }
+    melee() { this.tone(300, 90, 0.16, 'triangle', 0.09); }
+    missile() { this.tone(240, 720, 0.18, 'sine', 0.05); }
+    transform() { this.tone(220, 560, 0.35, 'triangle', 0.07); }
+    combine() { this.tone(180, 880, 0.75, 'sawtooth', 0.11); }
+    hit() { this.tone(160, 60, 0.09, 'square', 0.06); }
+    landGround() { this.tone(95, 32, 0.28, 'triangle', 0.12); }
+    landWater() { this.tone(340, 110, 0.24, 'sine', 0.08); }
+    explosion() { this.tone(120, 28, 0.42, 'sawtooth', 0.11); }
+    alert() { this.tone(520, 520, 0.16, 'sine', 0.06); }
+  }
+  const sfx = new SoundFX();
+
+  // =========================================================================
+  // 3. ユーティリティ & マテリアル共有キャッシュ
+  // =========================================================================
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const smoothstep = (t) => { const c = clamp(t, 0, 1); return c * c * (3 - 2 * c); };
+  const wrapAngle = (a) => {
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
+  };
+
+  const matCache = new Map();
+  const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+  function getMat(colorHex, emissiveHex = 0x000000, emissiveIntensity = 0) {
+    const key = `${colorHex}_${emissiveHex}_${emissiveIntensity}`;
+    if (!matCache.has(key)) {
+      matCache.set(key, new THREE.MeshLambertMaterial({
+        color: colorHex, emissive: emissiveHex, emissiveIntensity
+      }));
+    }
+    return matCache.get(key);
+  }
+
+  function createOceanTexture() {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 256;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0c4a6e';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 650; i++) {
+      g.fillStyle = Math.random() > 0.45 ? 'rgba(56, 189, 248, 0.16)' : 'rgba(7, 45, 78, 0.25)';
+      g.fillRect(Math.random() * 256, Math.random() * 256, 10 + Math.random() * 26, 2 + Math.random() * 3);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(90, 90);
+    return tex;
+  }
+
+  // =========================================================================
+  // 4. ボクセル3形態モデル & 合体大型スーパーロボモデル
+  // =========================================================================
+  function buildMechaBlueprints(palette) {
+    const f = [], m = [], r = [];
+    const addPair = (part, fx, fy, fz, fs, fc, mx, my, mz, ms, mc, rx, ry, rz, rs, rc) => {
+      f.push({ x: fx, y: fy, z: fz, s: fs, c: fc, part });
+      m.push({ x: mx, y: my, z: mz, s: ms, c: mc, part });
+      r.push({ x: rx, y: ry, z: rz, s: rs, c: rc, part });
+    };
+    const C1 = palette.main, C2 = palette.accent, C3 = palette.dark, C4 = palette.visor, C5 = palette.glow;
+
+    for (let i = 0; i < 6; i++) {
+      const zOff = (i - 2.5) * 0.65;
+      addPair('body',
+        0, 0, zOff * 1.15, [0.95, 0.65, 0.72], i > 3 ? C2 : C1,
+        0, 0.25, zOff * 1.0, [0.95, 0.7, 0.72], i > 3 ? C2 : C1,
+        0, 0.4 + (2.5 - i) * 0.22, (i === 5 ? 0.35 : 0.0), [1.1, 0.7, 0.75], i === 4 ? C2 : C1
+      );
+    }
+    addPair('body', 0, 0.05, 2.5, [0.55, 0.42, 0.9], C2, 0, 0.25, 2.2, [0.55, 0.45, 0.85], C2, 0, 0.25, 0.48, [0.65, 0.55, 0.55], C2);
+    addPair('body', 0, 0.45, 0.95, [0.62, 0.42, 1.25], C4, 0, 0.72, 0.85, [0.62, 0.44, 1.15], C4, 0, 0.75, 0.42, [0.65, 0.52, 0.42], C4);
+
+    addPair('head', 0, 0.32, -0.35, [0.5, 0.35, 0.55], C3, 0, 0.58, -0.1, [0.55, 0.4, 0.55], C3, 0, 1.55, 0.05, [0.68, 0.65, 0.65], C1);
+    addPair('head', 0, 0.36, 0.0, [0.35, 0.22, 0.3], C4, 0, 0.65, 0.15, [0.42, 0.25, 0.32], C4, 0, 1.58, 0.38, [0.52, 0.25, 0.25], C4);
+    addPair('head', 0, 0.48, -0.45, [0.15, 0.28, 0.4], C2, 0, 0.78, -0.25, [0.18, 0.3, 0.38], C2, 0, 1.98, 0.05, [0.18, 0.45, 0.28], C2);
+
+    for (const side of [1, -1]) {
+      const wTag = side > 0 ? 'wingL' : 'wingR';
+      const tTag = side > 0 ? 'wingTipL' : 'wingTipR';
+      const flTag = side > 0 ? 'flapL' : 'flapR';
+      for (let w = 0; w < 4; w++) {
+        const wx = side * (0.95 + w * 0.55), wz = -0.1 - w * 0.32;
+        addPair(wTag,
+          wx, 0.02, wz, [0.6, 0.16, 0.85], w % 2 === 0 ? C1 : C2,
+          wx * 0.95, 0.32, wz, [0.58, 0.18, 0.82], w % 2 === 0 ? C1 : C2,
+          side * (0.7 + w * 0.22), 0.75 - w * 0.25, -0.58 - w * 0.08, [0.22, 0.65, 0.55], w % 2 === 0 ? C1 : C2
+        );
+      }
+      addPair(tTag, side * 3.15, 0.08, -1.45, [0.5, 0.15, 0.7], C2, side * 3.0, 0.36, -1.35, [0.48, 0.16, 0.68], C2, side * 1.55, -0.05, -0.78, [0.2, 0.55, 0.45], C2);
+      addPair(flTag, side * 1.8, 0.0, -0.95, [0.9, 0.12, 0.32], C3, side * 1.7, 0.3, -0.88, [0.85, 0.12, 0.3], C3, side * 1.05, 0.3, -0.72, [0.2, 0.45, 0.25], C3);
+      addPair(wTag, side * 0.52, 0.58, -1.75, [0.14, 0.78, 0.75], C2, side * 0.52, 0.82, -1.55, [0.14, 0.72, 0.7], C2, side * 0.45, 1.15, -0.52, [0.16, 0.65, 0.42], C2);
+    }
+
+    addPair('armL', 0.62, -0.25, 0.25, [0.42, 0.38, 0.72], C1, 0.85, -0.05, 0.45, [0.45, 0.42, 0.62], C1, 0.95, 0.95, 0.08, [0.55, 0.55, 0.55], C2);
+    addPair('armL', 0.65, -0.28, -0.45, [0.38, 0.35, 0.68], C3, 0.95, -0.22, 1.05, [0.42, 0.4, 0.68], C1, 1.02, 0.48, 0.45, [0.45, 0.48, 0.62], C1);
+    addPair('armR', -0.62, -0.25, 0.25, [0.42, 0.38, 0.72], C1, -0.85, -0.05, 0.45, [0.45, 0.42, 0.62], C1, -0.95, 0.92, 0.12, [0.55, 0.55, 0.55], C2);
+    addPair('armR', -0.65, -0.28, -0.45, [0.38, 0.35, 0.68], C3, -0.95, -0.22, 1.05, [0.42, 0.4, 0.68], C1, -0.88, 0.56, 0.68, [0.44, 0.44, 0.68], C1);
+
+    addPair('gun', -0.45, -0.42, 0.85, [0.24, 0.24, 1.25], C3, -0.95, -0.22, 1.75, [0.28, 0.28, 1.35], C3, -0.88, 0.62, 1.38, [0.32, 0.34, 1.55], C3);
+    addPair('gun', 0.45, -0.42, 0.85, [0.24, 0.24, 1.25], C3, 0.95, -0.22, 1.65, [0.26, 0.26, 1.15], C3, -0.88, 0.62, 2.22, [0.22, 0.22, 0.55], C5);
+    addPair('shield', 0.0, -0.38, -0.1, [0.6, 0.18, 0.9], C2, 1.15, -0.15, 0.75, [0.2, 0.65, 0.95], C2, 1.26, 0.55, 0.55, [0.22, 1.0, 0.78], C2);
+
+    for (const side of [1, -1]) {
+      const lTag = side > 0 ? 'legL' : 'legR';
+      addPair(lTag, side * 0.45, -0.2, -1.15, [0.45, 0.42, 0.82], C1, side * 0.68, -0.75, -0.35, [0.46, 0.75, 0.48], C1, side * 0.5, -0.45, 0.0, [0.48, 0.78, 0.5], C1);
+      addPair(lTag, side * 0.48, -0.22, -1.95, [0.48, 0.45, 0.85], C2, side * 0.72, -1.45, -0.12, [0.5, 0.78, 0.52], C2, side * 0.52, -1.2, 0.02, [0.52, 0.8, 0.54], C2);
+      addPair(lTag, side * 0.48, -0.22, -2.55, [0.48, 0.42, 0.5], C3, side * 0.72, -1.95, 0.15, [0.56, 0.3, 0.82], C3, side * 0.54, -1.72, 0.22, [0.56, 0.32, 0.88], C3);
+    }
+
+    for (const side of [1, -1]) {
+      addPair('thruster', side * 0.45, -0.18, -3.1, [0.3, 0.3, 0.95], C5, side * 0.55, 0.05, -2.0, [0.26, 0.26, 0.55], C5, side * 0.42, 0.55, -0.68, [0.26, 0.26, 0.45], C5);
+    }
+
+    f.push({ x: 0, y: 0.2, z: -2.0, s: [0.35, 0.35, 0.7], c: C3, part: 'body' });
+    return [f, m, r];
+  }
+
+  // 合体大型スーパーロボ専用モデル（3機の色＋黄金の装飾が合体！）
+  function buildSuperRobotGroup() {
+    const grp = new THREE.Group();
+    const parts = [];
+    const addBox = (part, x, y, z, sx, sy, sz, col, em = 0, ei = 0) => {
+      const m = new THREE.Mesh(unitBoxGeo, getMat(col, em, ei));
+      m.position.set(x, y, z);
+      m.scale.set(sx, sy, sz);
+      grp.add(m);
+      parts.push({ mesh: m, basePos: new THREE.Vector3(x, y, z), baseScale: new THREE.Vector3(sx, sy, sz), part });
+      return m;
+    };
+
+    // 重厚な胴体（蒼＋白）＆胸部黄金V字クレスト＆コア
+    addBox('body', 0, 1.4, 0, 2.5, 2.6, 1.6, 0x0284c7);
+    addBox('body', 0, 2.0, 0.85, 2.2, 0.7, 0.4, 0xfacc15, 0xfacc15, 0.5);
+    addBox('body', 0, 1.4, 0.9, 0.9, 0.9, 0.4, 0x38bdf8, 0x38bdf8, 0.9);
+    addBox('body', 0, -0.1, 0, 1.9, 0.9, 1.4, 0x1e293b);
+
+    // 頭部（兜＋黄金角飾り）
+    addBox('head', 0, 3.3, 0.1, 1.25, 1.25, 1.25, 0xeef4ff);
+    addBox('head', 0, 3.35, 0.75, 0.95, 0.4, 0.3, 0x38bdf8, 0x38bdf8, 0.8);
+    addBox('head', 0.55, 4.15, 0.45, 0.9, 0.45, 0.25, 0xfacc15, 0xfacc15, 0.5);
+    addBox('head', -0.55, 4.15, 0.45, 0.9, 0.45, 0.25, 0xfacc15, 0xfacc15, 0.5);
+
+    // 紅鷹と翠盾の巨大ショルダーアーマー＆翼
+    addBox('armL', 2.05, 2.3, 0, 1.5, 1.3, 1.6, 0x10b981); // 翠盾肩
+    addBox('armL', 2.15, 1.1, 0.4, 1.1, 1.5, 1.1, 0xf1f5f9);
+    addBox('shield', 2.65, 1.2, 0.9, 0.45, 2.4, 1.6, 0x10b981);
+    addBox('armR', -2.05, 2.3, 0, 1.5, 1.3, 1.6, 0xdc2626); // 紅鷹肩
+    addBox('armR', -2.0, 1.1, 0.9, 1.05, 1.05, 1.6, 0x18181b);
+    // 超大型メガ粒子ライフル
+    addBox('gun', -2.0, 1.1, 2.6, 0.7, 0.8, 2.8, 0xfacc15);
+    addBox('gun', -2.0, 1.1, 4.2, 0.45, 0.45, 1.1, 0x38bdf8, 0x38bdf8, 0.9);
+
+    // 背中の大型合体ウイング（蒼・紅・金）
+    for (const side of [1, -1]) {
+      addBox('wing', side * 2.8, 2.5, -1.2, 3.6, 1.6, 0.35, side > 0 ? 0x0284c7 : 0xdc2626);
+      addBox('wing', side * 4.2, 3.0, -1.3, 1.6, 1.1, 0.35, 0xfacc15, 0xfacc15, 0.4);
+      addBox('thruster', side * 0.9, 1.5, -1.3, 0.65, 0.65, 1.2, 0x38bdf8, 0x38bdf8, 0.95);
+    }
+
+    // 脚（重厚なレッグ）
+    for (const side of [1, -1]) {
+      const lTag = side > 0 ? 'legL' : 'legR';
+      addBox(lTag, side * 1.05, -1.1, 0, 1.1, 1.6, 1.2, 0x10b981);
+      addBox(lTag, side * 1.1, -2.5, 0.1, 1.25, 1.7, 1.35, side > 0 ? 0x0284c7 : 0xdc2626);
+      addBox(lTag, side * 1.1, -3.5, 0.45, 1.35, 0.65, 1.9, 0x1e293b);
+    }
+
+    return { group: grp, parts };
+  }
+
+  class VoxelRig {
+    constructor(palette) {
+      this.blueprints = buildMechaBlueprints(palette);
+      this.maxCount = Math.max(this.blueprints[0].length, this.blueprints[1].length, this.blueprints[2].length);
+      this.group = new THREE.Group();
+      this.voxels = [];
+      for (let i = 0; i < this.maxCount; i++) {
+        const mesh = new THREE.Mesh(unitBoxGeo, getMat(palette.main));
+        this.group.add(mesh);
+        this.voxels.push({ mesh });
+      }
+      this.wingTipLag = 0;
+      this.walkBlend = 0;
+      this.thrustBlend = 0;
+    }
+
+    updateTransformVisual(fromMode, toMode, morphT, animState) {
+      const bpA = this.blueprints[fromMode];
+      const bpB = this.blueprints[toMode];
+      const t = smoothstep(morphT);
+      const isMorphing = (fromMode !== toMode && morphT < 1);
+
+      this.wingTipLag = lerp(this.wingTipLag, animState.bankInput || 0, ANIM_CONFIG.wingTipLagLerp);
+      const targetWalk = (toMode === 2 && animState.moving && !animState.thrusting && animState.grounded) ? 1 : 0;
+      const targetThrust = (toMode === 2 && animState.thrusting) ? 1 : 0;
+      this.walkBlend = lerp(this.walkBlend, targetWalk, 0.16);
+      this.thrustBlend = lerp(this.thrustBlend, targetThrust, 0.16);
+
+      for (let i = 0; i < this.maxCount; i++) {
+        const vx = this.voxels[i];
+        const a = bpA[i], b = bpB[i];
+        if (!a && !b) { vx.mesh.visible = false; continue; }
+        vx.mesh.visible = true;
+
+        const baseA = a || { x: b.x, y: b.y, z: b.z, s: [0, 0, 0], c: b.c, part: b.part };
+        const baseB = b || { x: a.x, y: a.y, z: a.z, s: [0, 0, 0], c: a.c, part: a.part };
+
+        let x = lerp(baseA.x, baseB.x, t), y = lerp(baseA.y, baseB.y, t), z = lerp(baseA.z, baseB.z, t);
+        let sx = lerp(baseA.s[0], baseB.s[0], t), sy = lerp(baseA.s[1], baseB.s[1], t), sz = lerp(baseA.s[2], baseB.s[2], t);
+
+        if (isMorphing) {
+          const arc = Math.sin(t * Math.PI) * 0.55;
+          x += Math.sign(x || (i % 2 ? 1 : -1)) * arc * 0.6;
+          y += arc * 0.45;
+        }
+
+        const targetColor = (t < 0.5) ? baseA.c : baseB.c;
+        const part = (t < 0.5) ? baseA.part : baseB.part;
+        const activeMode = (t < 0.5) ? fromMode : toMode;
+
+        vx.mesh.material = (part === 'thruster')
+          ? getMat(targetColor, targetColor, 0.95)
+          : getMat(targetColor);
+
+        let rx = 0, ry = 0, rz = 0;
+        const time = animState.time;
+
+        if (part === 'wingTipL') { y += this.wingTipLag * ANIM_CONFIG.wingTipFlexAmount; rz += this.wingTipLag * 0.25; }
+        else if (part === 'wingTipR') { y -= this.wingTipLag * ANIM_CONFIG.wingTipFlexAmount; rz += this.wingTipLag * 0.25; }
+
+        if (activeMode === 0) {
+          if (part === 'thruster') {
+            const flicker = 0.78 + 0.25 * Math.sin(time * ANIM_CONFIG.thrusterFlickerSpeed + i);
+            const lenMul = (animState.boosting ? ANIM_CONFIG.thrusterBoostLen : ANIM_CONFIG.thrusterBaseLen) * flicker;
+            sz *= lenMul; z -= (lenMul - 1) * 0.45;
+          } else if (part === 'flapL') rx += (animState.bankInput || 0) * ANIM_CONFIG.flapDeflectAngle;
+          else if (part === 'flapR') rx -= (animState.bankInput || 0) * ANIM_CONFIG.flapDeflectAngle;
+        }
+
+        if (activeMode === 1) {
+          if (part === 'legL' || part === 'legR') {
+            const legDir = part === 'legL' ? 1 : -1;
+            const swing = clamp(-animState.forwardSpeed * ANIM_CONFIG.midLegVelFactor, -0.35, 0.35) + Math.sin(time * 4.5 + legDir) * 0.08;
+            z += swing; rx += swing * 0.6;
+          }
+          if (part === 'gun' && animState.gatlingFiring) {
+            z -= Math.abs(Math.sin(time * ANIM_CONFIG.gatlingRecoilFreq)) * ANIM_CONFIG.gatlingRecoilAmp;
+          }
+        }
+
+        if (activeMode === 2) {
+          const walkPhase = time * ANIM_CONFIG.robotWalkSpeed;
+          const walkSin = Math.sin(walkPhase) * this.walkBlend;
+          const walkBounce = Math.abs(Math.sin(walkPhase)) * ANIM_CONFIG.robotWalkBobAmp * this.walkBlend;
+          const aimPitch = clamp(animState.aimPitch || 0, -0.7, 0.85);
+
+          if (part !== 'thruster') y += walkBounce;
+          if (part === 'legL') {
+            z += walkSin * ANIM_CONFIG.robotLegSwingAmp + this.thrustBlend * 0.38;
+            rx -= walkSin * 0.42 + this.thrustBlend * 0.25;
+            y += Math.max(0, walkSin) * 0.22;
+          } else if (part === 'legR') {
+            z += -walkSin * ANIM_CONFIG.robotLegSwingAmp - this.thrustBlend * 0.38;
+            rx += walkSin * 0.42 + this.thrustBlend * 0.28;
+            y += Math.max(0, -walkSin) * 0.22;
+          } else if (part === 'armL' || part === 'shield') {
+            if (animState.guarding) { x -= 0.72; z += 0.62; ry -= 0.55; }
+            else { z -= walkSin * ANIM_CONFIG.robotArmSwingAmp - this.thrustBlend * 0.15; rx += walkSin * 0.28; }
+          } else if (part === 'armR' || part === 'gun') {
+            const aimOff = aimPitch * ANIM_CONFIG.robotGunAimPitchFactor;
+            rx -= aimOff; y += Math.sin(aimOff) * 0.55;
+            if (animState.laserRecoil > 0) z -= animState.laserRecoil * ANIM_CONFIG.laserRecoilPush;
+          } else if (part === 'head') {
+            ry += clamp(animState.turnInput || 0, -1, 1) * ANIM_CONFIG.robotHeadYawAmp;
+            rx -= aimPitch * ANIM_CONFIG.robotHeadPitchAmp;
+          } else if (part === 'thruster') {
+            const activeJet = (animState.thrusting || !animState.grounded);
+            const lenMul = (activeJet ? 2.45 : 0.75) * (0.8 + 0.25 * Math.sin(time * ANIM_CONFIG.thrusterFlickerSpeed + i));
+            sz *= lenMul; z -= (lenMul - 1) * 0.35;
+          }
+        }
+
+        if (animState.squat > 0 && part !== 'thruster') y -= animState.squat * ANIM_CONFIG.jumpSquatDepth;
+        vx.mesh.position.set(x, y, z);
+        vx.mesh.scale.set(Math.max(0.001, sx), Math.max(0.001, sy), Math.max(0.001, sz));
+        vx.mesh.rotation.set(rx, ry, rz);
+      }
+    }
+  }
+
+  // =========================================================================
+  // 5. 世界生成
+  // =========================================================================
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x60a5fa);
+  scene.fog = new THREE.FogExp2(0x7dd3fc, 0.00145);
+
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.5, 1600);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  scene.add(new THREE.HemisphereLight(0xe0f2fe, 0x0c4a6e, 0.85));
+  const dirLight = new THREE.DirectionalLight(0xfffbeb, 1.0);
+  dirLight.position.set(160, 260, 120);
+  scene.add(dirLight);
+
+  const ocean = new THREE.Mesh(new THREE.PlaneGeometry(3200, 3200), new THREE.MeshLambertMaterial({ map: createOceanTexture(), color: 0x38bdf8 }));
+  ocean.rotation.x = -Math.PI / 2;
+  scene.add(ocean);
+
+  const islandSpecs = [
+    { x: 140, z: 180, r: 28, h: 16 }, { x: -210, z: 120, r: 34, h: 22 },
+    { x: 260, z: -220, r: 30, h: 18 }, { x: -180, z: -260, r: 25, h: 14 },
+    { x: 40, z: 380, r: 40, h: 26 }, { x: -400, z: -40, r: 36, h: 24 },
+    { x: 420, z: 110, r: 32, h: 20 }, { x: 0, z: -440, r: 42, h: 28 },
+    { x: 0, z: 55, r: 24, h: 12 }
+  ];
+
+  function getSurfaceInfo(x, z) {
+    let bestY = 0, type = 'water';
+    for (const sp of islandSpecs) {
+      const dx = x - sp.x, dz = z - sp.z;
+      if (Math.abs(dx) <= sp.r && Math.abs(dz) <= sp.r) {
+        type = 'ground';
+        bestY = Math.max(bestY, 3.0);
+        if (Math.abs(dx) <= sp.r * 0.725 && Math.abs(dz) <= sp.r * 0.725) bestY = Math.max(bestY, 3.0 + sp.h * 0.55);
+        if (Math.abs(x - (sp.x + sp.r * 0.15)) <= sp.r * 0.4 && Math.abs(z - (sp.z - sp.r * 0.1)) <= sp.r * 0.4) bestY = Math.max(bestY, 3.0 + sp.h * 0.975);
+      }
+    }
+    return { y: bestY, type };
+  }
+
+  for (const sp of islandSpecs) {
+    const grp = new THREE.Group(); grp.position.set(sp.x, 0, sp.z);
+    const sand = new THREE.Mesh(unitBoxGeo, getMat(0xfde68a)); sand.scale.set(sp.r * 2, 3, sp.r * 2); sand.position.y = 1.5; grp.add(sand);
+    const grass = new THREE.Mesh(unitBoxGeo, getMat(0x22c55e)); grass.scale.set(sp.r * 1.45, sp.h * 0.55, sp.r * 1.45); grass.position.y = 3 + sp.h * 0.275; grp.add(grass);
+    const rock = new THREE.Mesh(unitBoxGeo, getMat(0x64748b)); rock.scale.set(sp.r * 0.8, sp.h * 0.65, sp.r * 0.8); rock.position.set(sp.r * 0.15, 3 + sp.h * 0.65, -sp.r * 0.1); grp.add(rock);
+    scene.add(grp);
+  }
+  for (let i = 0; i < 36; i++) {
+    const cg = new THREE.Group();
+    const ang = (i / 36) * Math.PI * 2 + Math.random() * 0.3, dist = 160 + Math.random() * 580;
+    cg.position.set(Math.cos(ang) * dist, 78 + Math.random() * 65, Math.sin(ang) * dist);
+    for (let b = 0; b < 3; b++) {
+      const cm = new THREE.Mesh(unitBoxGeo, getMat(0xffffff));
+      cm.scale.set(22 + Math.random() * 18, 6 + Math.random() * 4, 16 + Math.random() * 14);
+      cm.position.set((b - 1) * 14, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 10);
+      cg.add(cm);
+    }
+    scene.add(cg);
+  }
+
+  // =========================================================================
+  // 6. ゲーム状態 & 機体選択UI構築
+  // =========================================================================
+  const GAME_STATES = { TITLE: 'TITLE', BRIEFING: 'BRIEFING', WAVE1: 'WAVE1', TRANSITION_W2: 'TRANSITION_W2', WAVE2: 'WAVE2', TRANSITION_BOSS: 'TRANSITION_BOSS', BOSS: 'BOSS', RESULT: 'RESULT' };
+  let gameState = GAME_STATES.TITLE;
+  let paused = false, globalTime = 0, stateTimer = 0, sessionTimeLeft = 300;
+  let score = 0, kills = 0, damageTaken = 0, cameraShake = 0, radioTimeout = 0;
+
+  const keys = {}, justPressed = {};
+  const BLOCK_SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
+  window.addEventListener('keydown', (e) => {
+    if (BLOCK_SCROLL_KEYS.has(e.code)) e.preventDefault();
+    sfx.init();
+    if (!keys[e.code]) justPressed[e.code] = true;
+    keys[e.code] = true;
+  });
+  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+  let playerRig = new VoxelRig(FIGHTER_TYPES[0].palette);
+  scene.add(playerRig.group);
+
+  const superModel = buildSuperRobotGroup();
+  superModel.group.visible = false;
+  scene.add(superModel.group);
+
+  const shieldBubble = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.8, 0.35), new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.45 }));
+  shieldBubble.position.set(0, 0.3, 1.85); shieldBubble.visible = false;
+  playerRig.group.add(shieldBubble);
+
+  const meleeSlashMesh = new THREE.Mesh(new THREE.BoxGeometry(5.8, 1.2, 4.2), new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7 }));
+  meleeSlashMesh.visible = false;
+  playerRig.group.add(meleeSlashMesh);
+
+  const superSlashMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 2.5, 11), new THREE.MeshBasicMaterial({ color: 0xfde047, transparent: true, opacity: 0.75 }));
+  superSlashMesh.visible = false;
+  superModel.group.add(superSlashMesh);
+
+  const laserBeamMesh = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.75, 110), new THREE.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.85 }));
+  laserBeamMesh.visible = false;
+  scene.add(laserBeamMesh);
+
+  const superBeamMesh = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 150), new THREE.MeshBasicMaterial({ color: 0xfde047, transparent: true, opacity: 0.9 }));
+  superBeamMesh.visible = false;
+  scene.add(superBeamMesh);
+
+  function rebuildPlayerRig() {
+    scene.remove(playerRig.group);
+    playerRig = new VoxelRig(FIGHTER_TYPES[selectedFighterIdx].palette);
+    playerRig.group.add(shieldBubble);
+    playerRig.group.add(meleeSlashMesh);
+    scene.add(playerRig.group);
+  }
+
+  function renderFighterCards() {
+    const container = document.getElementById('fighter-cards');
+    container.innerHTML = '';
+    FIGHTER_TYPES.forEach((ft, idx) => {
+      const card = document.createElement('div');
+      card.className = 'fighter-card' + (idx === selectedFighterIdx ? ' selected' : '');
+      card.innerHTML = `
+        <div class="fighter-name">[${idx + 1}] ${ft.name}</div>
+        <div class="fighter-role" style="color:${ft.roleColor};">${ft.role}</div>
+        <div class="fighter-desc">${ft.desc}</div>
+      `;
+      card.addEventListener('click', () => selectFighter(idx));
+      container.appendChild(card);
+    });
+  }
+
+  function selectFighter(idx) {
+    if (selectedFighterIdx === idx) return;
+    selectedFighterIdx = (idx + FIGHTER_TYPES.length) % FIGHTER_TYPES.length;
+    rebuildPlayerRig();
+    renderFighterCards();
+    sfx.transform();
+  }
+  renderFighterCards();
+
+  // =========================================================================
+  // 7. 自機 & 僚機 & 敵データ
+  // =========================================================================
+  const player = {
+    pos: new THREE.Vector3(0, 22, 0), vel: new THREE.Vector3(),
+    yaw: 0, pitch: 0, roll: 0, aimPitch: 0,
+    mode: 0, fromMode: 0, morphTimer: 1, morphDur: 0.9,
+    hp: 105, maxHp: 105, invulnTimer: 0,
+    fireCd: 0, bombCd: 0, missileCd: 0, missileLockDelay: 0, lockedTargets: [],
+    defCd: 0, rollTimer: 0, rollDir: 1, dodgeTimer: 0, dodgeDir: new THREE.Vector3(),
+    guarding: false, gatlingSpin: 0, laserHeat: 0, overheated: false, laserRecoil: 0,
+    meleeTimer: 0, squat: 0, forwardSpeed: 0, boosting: false, grounded: false, surfaceType: 'water', trailCd: 0,
+    // 合体ゲージ & スーパーロボ
+    combineGauge: 0,
+    combiningTimer: 0,
+    superTimer: 0
+  };
+
+  let wingmen = [];
+  let enemies = [];
+  let projectiles = [];
+  let missiles = [];
+  let particles = [];
+  let boss = null;
+
+  const camState = { mode: 'CHASE', pos: new THREE.Vector3(0, 35, -35), lookAt: new THREE.Vector3(0, 22, 20), fov: 62 };
+
+  function spawnWingmen() {
+    for (const w of wingmen) scene.remove(w.rig.group);
+    wingmen = [];
+    const others = FIGHTER_TYPES.filter((_, i) => i !== selectedFighterIdx);
+    others.forEach((ft, idx) => {
+      const rig = new VoxelRig(ft.palette);
+      const side = idx === 0 ? 1 : -1;
+      rig.group.position.set(player.pos.x + side * 14, player.pos.y + 2, player.pos.z - 12);
+      scene.add(rig.group);
+      wingmen.push({
+        type: ft, rig, pos: rig.group.position,
+        side, yaw: player.yaw, roll: 0,
+        mode: 0, fromMode: 0, morphTimer: 1, modeCd: 4 + idx * 2, fireCd: 1.0 + idx * 0.5
+      });
+    });
+    el('hud-wingmen').textContent = `僚機: ${wingmen.map(w => w.type.name.split(' ')[1]).join('・')} 随伴中`;
+  }
+
+  function spawnEnemyWave(count, tough) {
+    enemies = [];
+    for (let i = 0; i < count; i++) {
+      const ang = (i / count) * Math.PI * 2 + Math.random() * 0.5;
+      const dist = 120 + Math.random() * 55;
+      const rig = new VoxelRig({ main: 0x334155, accent: 0x991b1b, dark: 0x0f172a, visor: 0xef4444, glow: 0xf43f5e });
+      rig.group.position.set(player.pos.x + Math.cos(ang) * dist, 18 + Math.random() * 14, player.pos.z + Math.sin(ang) * dist);
+      scene.add(rig.group);
+      enemies.push({
+        rig, pos: rig.group.position, yaw: ang + Math.PI, pitch: 0, roll: 0,
+        hp: tough ? 115 : 80, maxHp: tough ? 115 : 80, speed: tough ? 34 : 26,
+        mode: 0, fromMode: 0, morphTimer: 1, modeSwitchCd: 4 + Math.random() * 4,
+        fireCd: 1.5 + Math.random() * 1.5, strafeSign: i % 2 === 0 ? 1 : -1
+      });
+    }
+  }
+
+  function spawnBoss() {
+    const grp = new THREE.Group();
+    const spawnDist = 210;
+    grp.position.set(player.pos.x + Math.sin(player.yaw) * spawnDist, 0, player.pos.z + Math.cos(player.yaw) * spawnDist);
+    const addBox = (x, y, z, sx, sy, sz, col, em = 0, ei = 0) => {
+      const m = new THREE.Mesh(unitBoxGeo, getMat(col, em, ei));
+      m.position.set(x, y, z); m.scale.set(sx, sy, sz); grp.add(m); return m;
+    };
+    addBox(0, 5, 0, 26, 10, 88, 0x334155); addBox(0, 11, -2, 22, 4, 72, 0x475569);
+    addBox(0, 7, 48, 16, 8, 14, 0x1e293b); addBox(0, 9, 58, 8, 5, 10, 0x334155);
+    addBox(0, 19, -24, 14, 14, 18, 0x1e293b); addBox(0, 28, -24, 10, 6, 10, 0x0f172a);
+    addBox(0, 28, -18.5, 8, 2.2, 1.5, 0xef4444, 0xef4444, 0.8);
+    addBox(16, 9, -6, 10, 3, 46, 0x1e293b); addBox(-16, 9, -6, 10, 3, 46, 0x1e293b);
+    const coreMesh = addBox(0, 16.5, 6, 8.5, 7.5, 8.5, 0xf43f5e, 0xf43f5e, 1.0);
+    addBox(5.5, 14.5, 6, 2, 5, 10, 0x0f172a); addBox(-5.5, 14.5, 6, 2, 5, 10, 0x0f172a);
+
+    const turrets = [
+      new THREE.Vector3(0, 14, 28), new THREE.Vector3(14, 11.5, 6),
+      new THREE.Vector3(-14, 11.5, 6), new THREE.Vector3(0, 14, -10)
+    ].map((tp, idx) => {
+      const tg = new THREE.Group(); tg.position.copy(tp);
+      const base = new THREE.Mesh(unitBoxGeo, getMat(0x0f172a)); base.scale.set(4.5, 2.6, 4.5); tg.add(base);
+      const barrel = new THREE.Mesh(unitBoxGeo, getMat(0x94a3b8)); barrel.scale.set(1.2, 1.0, 5.5); barrel.position.set(0, 0.4, 3.2); tg.add(barrel);
+      grp.add(tg);
+      return { group: tg, fireCd: 1.5 + idx * 0.65, yaw: 0 };
+    });
+
+    scene.add(grp);
+    boss = { group: grp, pos: grp.position, yaw: player.yaw + Math.PI * 0.65, speed: 11, hp: 780, maxHp: 780, coreMesh, coreWorldPos: new THREE.Vector3(), turrets };
+  }
+
+  // =========================================================================
+  // 8. エフェクト・UI・セッション制御
+  // =========================================================================
+  function spawnParticles(pos, color, count, speed, life, scale = 1.2, gravity = 10) {
+    for (let i = 0; i < count; i++) {
+      const m = new THREE.Mesh(unitBoxGeo, getMat(color, color, 0.45));
+      m.position.copy(pos); m.scale.setScalar(scale * (0.6 + Math.random() * 0.8)); scene.add(m);
+      const theta = Math.random() * Math.PI * 2, phi = (Math.random() - 0.5) * Math.PI, spd = speed * (0.4 + Math.random() * 0.8);
+      particles.push({ mesh: m, vel: new THREE.Vector3(Math.cos(theta) * Math.cos(phi) * spd, Math.abs(Math.sin(phi)) * spd + speed * 0.35, Math.sin(theta) * Math.cos(phi) * spd), life, maxLife: life, gravity });
+    }
+  }
+  function spawnSplashRing(pos, isWater) {
+    const count = isWater ? 20 : 18, col = isWater ? 0xe0f2fe : 0xd6d3d1;
+    for (let i = 0; i < count; i++) {
+      const ang = (i / count) * Math.PI * 2 + Math.random() * 0.2, spd = (isWater ? 18 : 16) * (0.6 + Math.random() * 0.6);
+      const m = new THREE.Mesh(unitBoxGeo, getMat(col, isWater ? 0xbae6fd : 0, isWater ? 0.3 : 0));
+      m.position.set(pos.x, pos.y + 0.3, pos.z); m.scale.setScalar(isWater ? 1.15 : 1.35); scene.add(m);
+      particles.push({ mesh: m, vel: new THREE.Vector3(Math.cos(ang) * spd, isWater ? (14 + Math.random() * 14) : (4 + Math.random() * 6), Math.sin(ang) * spd), life: 0.68, maxLife: 0.68, gravity: isWater ? 34 : 12 });
+    }
+  }
+  function spawnTrail(pos, color = 0xffffff, scale = 0.6) {
+    const m = new THREE.Mesh(unitBoxGeo, getMat(color, color, 0.25));
+    m.position.copy(pos); m.scale.setScalar(scale); scene.add(m);
+    particles.push({ mesh: m, vel: new THREE.Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2), life: 0.48, maxLife: 0.48, gravity: 0 });
+  }
+
+  const el = (id) => document.getElementById(id);
+  function showRadio(text, duration = 4.0) { const box = el('radio-box'); box.textContent = text; box.classList.remove('hidden'); radioTimeout = duration; }
+  function showBanner(text) { const b = el('banner-center'); b.textContent = text; b.classList.remove('hidden'); }
+  function hideBanner() { el('banner-center').classList.add('hidden'); }
+
+  function updateHelpRow() {
+    const combineTxt = (player.combineGauge >= 100 && player.superTimer <= 0) ? '【[G]合体発動可能！】 ' : '';
+    if (player.superTimer > 0) {
+      el('hud-help').textContent = `【超合体スーパーロボ】 [↑↓]照準 [Space]高速推進 [Z]メガ粒子砲 [X]ギガブレード [F]8連ミサイル [R]衝撃波バリア`;
+    } else if (player.mode === 0) {
+      el('hud-help').textContent = `${combineTxt}【戦闘機】 [↑↓]高度 [Space]ブースト [Z]連装砲 [X]爆弾 [R]ロール無敵 | [T]変形 [F]ミサイル`;
+    } else if (player.mode === 1) {
+      el('hud-help').textContent = `${combineTxt}【中間形態】 [↑↓]高度 [Space]前進(ホバー) [Z長押]ガトリング [X]爆弾 [R]横跳び回避 | [T]変形 [F]ミサイル`;
+    } else {
+      el('hud-help').textContent = `${combineTxt}【ロボット】 [↑↓]照準上下 [Space]スラスター移動 [Z]レーザー [X]近接 [R長押]ガード [C]後方ジャンプ`;
+    }
+  }
+
+  function switchScreen(targetId) {
+    for (const id of ['screen-title', 'screen-briefing', 'screen-pause', 'screen-result']) {
+      el(id).classList.toggle('hidden', id !== targetId);
+    }
+  }
+
+  function clearEntities() {
+    for (const w of wingmen) scene.remove(w.rig.group); wingmen = [];
+    for (const e of enemies) scene.remove(e.rig.group); enemies = [];
+    for (const p of projectiles) scene.remove(p.mesh); projectiles = [];
+    for (const m of missiles) scene.remove(m.mesh); missiles = [];
+    for (const pt of particles) scene.remove(pt.mesh); particles = [];
+    if (boss) { scene.remove(boss.group); boss = null; }
+    laserBeamMesh.visible = false; superBeamMesh.visible = false;
+    shieldBubble.visible = false; meleeSlashMesh.visible = false;
+    superSlashMesh.visible = false; superModel.group.visible = false;
+  }
+
+  function resetPlayer() {
+    const ft = FIGHTER_TYPES[selectedFighterIdx];
+    player.pos.set(0, 22, 0); player.vel.set(0, 0, 0);
+    player.yaw = 0; player.pitch = 0; player.roll = 0; player.aimPitch = 0;
+    player.mode = 0; player.fromMode = 0; player.morphTimer = 1;
+    player.maxHp = ft.maxHp; player.hp = ft.maxHp;
+    player.invulnTimer = 0; player.fireCd = 0; player.bombCd = 0; player.missileCd = 0;
+    player.missileLockDelay = 0; player.lockedTargets = []; player.defCd = 0;
+    player.rollTimer = 0; player.dodgeTimer = 0; player.guarding = false;
+    player.gatlingSpin = 0; player.laserHeat = 0; player.overheated = false;
+    player.laserRecoil = 0; player.meleeTimer = 0; player.squat = 0;
+    player.forwardSpeed = 30; player.grounded = false; player.trailCd = 0;
+    player.combineGauge = 0; player.combiningTimer = 0; player.superTimer = 0;
+    playerRig.group.visible = true;
+    superModel.group.visible = false;
+    el('hud-unit-name').textContent = ft.name;
+    updateHelpRow();
+  }
+
+  function startBriefing() {
+    clearEntities();
+    rebuildPlayerRig();
+    resetPlayer();
+    const ft = FIGHTER_TYPES[selectedFighterIdx];
+    const others = FIGHTER_TYPES.filter((_, i) => i !== selectedFighterIdx);
+    el('briefing-radio').innerHTML = `<b style="color:#7dd3fc;">[管制官 ミナト]</b><br>「隊長機 ${ft.name}、随伴の ${others[0].name}・${others[1].name} とともに発艦せよ！連携攻撃で合体ゲージを溜め、切り札の超合体を決めろ！」`;
+    gameState = GAME_STATES.BRIEFING; stateTimer = 3.8;
+    switchScreen('screen-briefing'); el('hud').classList.add('hidden');
+  }
+
+  function startWave1() {
+    switchScreen(null);
+    el('hud').classList.remove('hidden'); el('hud-top-center').classList.add('hidden');
+    paused = false; sessionTimeLeft = 300; score = 0; kills = 0; damageTaken = 0;
+    spawnWingmen();
+    gameState = GAME_STATES.WAVE1;
+    spawnEnemyWave(3, false);
+    showBanner('WAVE 1 ― 3機編隊出撃');
+    setTimeout(() => { if (gameState === GAME_STATES.WAVE1) hideBanner(); }, 2000);
+    showRadio('僚機「編隊完了！敵先遣隊3機を確認、援護するぞ！」', 4.2);
+    el('hud-mission-mini').textContent = '目標: 敵可変機を撃墜せよ (WAVE 1)';
+  }
+
+  function enterWave2Transition() {
+    gameState = GAME_STATES.TRANSITION_W2; stateTimer = 2.6;
+    showBanner('WAVE 1 クリア！\nWAVE 2 接近中…');
+    showRadio('管制「次の編隊が来るぞ！合体ゲージが溜まれば[G]キーでスーパーロボへ合体できる！」', 4.0);
+    sfx.alert();
+  }
+
+  function startWave2() {
+    hideBanner(); gameState = GAME_STATES.WAVE2;
+    spawnEnemyWave(4, true);
+    el('hud-mission-mini').textContent = '目標: 敵増援部隊を撃墜せよ (WAVE 2)';
+  }
+
+  function enterBossTransition() {
+    gameState = GAME_STATES.TRANSITION_BOSS; stateTimer = 2.8;
+    showBanner('WARNING!\n大型強襲艦 出現');
+    showRadio('僚機「でかい戦艦だ！全機で中央の赤いコアを集中攻撃しよう！」', 4.5);
+    sfx.alert();
+  }
+
+  function startBossWave() {
+    hideBanner(); gameState = GAME_STATES.BOSS;
+    spawnBoss(); el('hud-top-center').classList.remove('hidden');
+    el('hud-mission-mini').textContent = '目標: 大型強襲艦のコアを破壊せよ';
+  }
+
+  function finishSession(isVictory, reasonText) {
+    gameState = GAME_STATES.RESULT;
+    el('hud').classList.add('hidden'); switchScreen('screen-result');
+    const killScore = kills * 500, bossBonus = isVictory ? 5000 : 0;
+    const timeBonus = isVictory ? Math.floor(sessionTimeLeft) * 30 : 0;
+    const dmgPenalty = Math.floor(damageTaken) * 15;
+    const total = Math.max(0, killScore + bossBonus + timeBonus - dmgPenalty);
+    let rank = 'C';
+    if (isVictory) { rank = total >= 10000 ? 'S' : (total >= 7500 ? 'A' : (total >= 5000 ? 'B' : 'C')); }
+    el('result-status').textContent = isVictory ? 'MISSION COMPLETE ― 作戦成功' : `MISSION FAILED ― ${reasonText}`;
+    el('result-status').style.color = isVictory ? '#4ade80' : '#f87171';
+    el('result-rank').textContent = rank;
+    el('res-kills').textContent = kills; el('res-kill-score').textContent = killScore.toLocaleString();
+    el('res-boss-bonus').textContent = bossBonus.toLocaleString();
+    el('res-time').textContent = Math.floor(sessionTimeLeft); el('res-time-bonus').textContent = timeBonus.toLocaleString();
+    el('res-dmg').textContent = Math.floor(damageTaken); el('res-dmg-penalty').textContent = `-${dmgPenalty.toLocaleString()}`;
+    el('res-total').textContent = total.toLocaleString();
+    el('result-comment').textContent = isVictory
+      ? '管制「3機の見事な連携と合体戦術だった！蒼海防衛線を守り抜いたぞ！」'
+      : '管制「無念だ…全機帰還せよ。態勢を立て直して再出撃しよう！」';
+  }
+
+  // =========================================================================
+  // 9. 武装・合体・ダメージ処理
+  // =========================================================================
+  function addCombineGauge(amt) {
+    if (player.superTimer > 0 || player.combiningTimer > 0) return;
+    const prev = player.combineGauge;
+    player.combineGauge = Math.min(100, player.combineGauge + amt);
+    if (prev < 100 && player.combineGauge >= 100) {
+      sfx.alert();
+      showRadio('僚機「合体エネルギー100%！[G]キーで3機合体・スーパーロボを発動できるぞ！」', 5.0);
+      updateHelpRow();
+    }
+  }
+
+  function triggerCombine() {
+    player.combineGauge = 0;
+    player.combiningTimer = 1.0;
+    player.guarding = false;
+    player.invulnTimer = 1.5;
+    sfx.combine();
+    showBanner('合体シーケンス開始！\nアズール・カイザー 合体！');
+    showRadio('全機「了解！3機合体・フォーメーションX！！」', 3.5);
+  }
+
+  function finishCombineSequence() {
+    hideBanner();
+    player.superTimer = 20.0;
+    player.hp = Math.min(player.maxHp, player.hp + 25);
+    player.missileCd = 0;
+    playerRig.group.visible = false;
+    superModel.group.visible = true;
+    for (const w of wingmen) w.rig.group.visible = false;
+    spawnParticles(player.pos, 0xfde047, 28, 32, 0.85, 1.8, 0);
+    cameraShake = 0.85;
+    updateHelpRow();
+  }
+
+  function endSuperMode() {
+    player.superTimer = 0;
+    playerRig.group.visible = true;
+    superModel.group.visible = false;
+    superBeamMesh.visible = false;
+    superSlashMesh.visible = false;
+    for (const w of wingmen) {
+      w.rig.group.visible = true;
+      w.pos.set(player.pos.x + w.side * 16, player.pos.y + 4, player.pos.z - 10);
+    }
+    spawnParticles(player.pos, 0x38bdf8, 18, 24, 0.6, 1.2, 0);
+    showRadio('管制「合体限界時間だ！全機分離して戦闘を続行せよ！」', 3.5);
+    updateHelpRow();
+  }
+
+  function getAllTargets() {
+    const list = [];
+    for (const e of enemies) list.push({ type: 'enemy', obj: e, pos: e.pos.clone() });
+    if (boss) { boss.coreMesh.getWorldPosition(boss.coreWorldPos); list.push({ type: 'bossCore', obj: boss, pos: boss.coreWorldPos.clone() }); }
+    return list;
+  }
+
+  function findAutoAimVector(origin, baseDir, maxAngleRad) {
+    let bestDir = baseDir.clone(), bestCos = Math.cos(maxAngleRad);
+    for (const tgt of getAllTargets()) {
+      const toT = tgt.pos.clone().sub(origin); const dist = toT.length();
+      if (dist < 1 || dist > 260) continue;
+      toT.normalize();
+      const dot = toT.dot(baseDir);
+      if (dot > bestCos) { bestCos = dot; bestDir = toT; }
+    }
+    return bestDir;
+  }
+
+  function spawnProjectile(pos, dir, speed, dmg, owner, color, size, life, isBomb = false) {
+    const m = new THREE.Mesh(unitBoxGeo, getMat(color, color, 0.7));
+    m.position.copy(pos); m.scale.set(size[0], size[1], size[2]);
+    m.lookAt(pos.clone().add(dir)); scene.add(m);
+    projectiles.push({ mesh: m, pos: m.position, vel: dir.clone().multiplyScalar(speed), dmg, owner, life, isBomb, radius: Math.max(size[0], size[1]) * 1.15 + 1.0 });
+  }
+
+  function damagePlayer(amount, attackerPos) {
+    if (player.invulnTimer > 0 || player.rollTimer > 0 || player.dodgeTimer > 0 || player.combiningTimer > 0) return;
+    if (player.mode === 2 && player.guarding && player.superTimer <= 0 && attackerPos) {
+      const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      const toAtk = attackerPos.clone().sub(player.pos).setY(0).normalize();
+      if (fwd.dot(toAtk) > 0.25) { spawnParticles(player.pos.clone().add(fwd.multiplyScalar(2.0)), 0x38bdf8, 5, 14, 0.25, 0.5); sfx.hit(); return; }
+    }
+    const finalAmt = player.superTimer > 0 ? amount * 0.25 : amount;
+    player.hp = Math.max(0, player.hp - finalAmt);
+    damageTaken += finalAmt;
+    player.invulnTimer = 0.75;
+    cameraShake = player.superTimer > 0 ? 0.35 : 0.95;
+    sfx.hit();
+    spawnParticles(player.pos, 0xf97316, 8, 16, 0.35, 0.8);
+    if (player.hp <= 0) {
+      spawnParticles(player.pos, 0xef4444, 28, 30, 0.9, 1.4); sfx.explosion();
+      finishSession(false, '自機撃墜');
+    }
+  }
+
+  function damageEnemy(enemy, amount, fromPlayer = true) {
+    enemy.hp -= amount;
+    if (fromPlayer) addCombineGauge(1.8);
+    spawnParticles(enemy.pos, 0xfde047, 4, 14, 0.22, 0.55);
+    if (enemy.hp <= 0) {
+      spawnParticles(enemy.pos, 0xf97316, 22, 26, 0.75, 1.3);
+      spawnParticles(enemy.pos, 0x94a3b8, 10, 18, 0.85, 1.1);
+      sfx.explosion(); cameraShake = Math.max(cameraShake, 0.45);
+      kills++; score += 500;
+      addCombineGauge(16);
+      scene.remove(enemy.rig.group);
+      enemies = enemies.filter(e => e !== enemy);
+    }
+  }
+
+  function damageBoss(amount, isCoreHit, fromPlayer = true) {
+    if (!boss) return;
+    const finalDmg = isCoreHit ? amount * 2.4 : amount * 0.45;
+    boss.hp = Math.max(0, boss.hp - finalDmg);
+    if (fromPlayer) addCombineGauge(isCoreHit ? 2.4 : 1.0);
+    if (isCoreHit) { score += Math.round(finalDmg * 1.5); spawnParticles(boss.coreWorldPos, 0x38bdf8, 6, 18, 0.28, 0.8); }
+    if (boss.hp <= 0) {
+      for (let i = 0; i < 4; i++) {
+        spawnParticles(boss.pos.clone().add(new THREE.Vector3((Math.random()-0.5)*28, 8+Math.random()*14, (Math.random()-0.5)*56)), 0xf97316, 20, 34, 1.2, 2.2);
+      }
+      sfx.explosion(); cameraShake = 1.4; scene.remove(boss.group); boss = null;
+      finishSession(true, '');
+    }
+  }
+
+  function fireMissilesVolley(count = 4) {
+    const targets = getAllTargets().map(t => ({ ...t, d: t.pos.distanceTo(player.pos) })).filter(t => t.d < 360).sort((a, b) => a.d - b.d).slice(0, 4);
+    for (let i = 0; i < count; i++) {
+      launchSingleMissile(targets.length > 0 ? targets[i % targets.length] : null, i);
+    }
+    sfx.missile();
+  }
+
+  function launchSingleMissile(targetRef, idx) {
+    const m = new THREE.Mesh(unitBoxGeo, getMat(0xfef08a, 0xf59e0b, 0.8));
+    m.scale.set(0.45, 0.45, 1.5);
+    const sideSign = idx % 2 === 0 ? 1 : -1, upBoost = 0.65 + (idx % 3) * 0.4;
+    const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+    const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+    m.position.copy(player.pos).addScaledVector(right, sideSign * (2.2 + Math.floor(idx / 2) * 0.9));
+    scene.add(m);
+    const initVel = fwd.clone().multiplyScalar(28).addScaledVector(right, sideSign * 24).add(new THREE.Vector3(0, 18 * upBoost, 0));
+    missiles.push({ mesh: m, pos: m.position, vel: initVel, targetRef, life: 4.5, trailTimer: 0 });
+  }
+
+  // =========================================================================
+  // 10. 更新処理（自機・スーパーロボ・僚機・敵）
+  // =========================================================================
+  function updatePlayer(dt) {
+    const ft = FIGHTER_TYPES[selectedFighterIdx];
+
+    // 合体演出中の処理
+    if (player.combiningTimer > 0) {
+      player.combiningTimer -= dt;
+      for (const w of wingmen) {
+        w.pos.lerp(player.pos, dt * 8.5);
+      }
+      if (Math.random() < 0.6) spawnParticles(player.pos, 0xfde047, 2, 18, 0.4, 1.1, 0);
+      if (player.combiningTimer <= 0) {
+        finishCombineSequence();
+      }
+      return;
+    }
+
+    // 合体ゲージ自然上昇 & Gキー合体発動
+    if (player.superTimer <= 0) {
+      addCombineGauge(dt * 1.8);
+      if (justPressed['KeyG'] && player.combineGauge >= 100) {
+        triggerCombine();
+        return;
+      }
+    } else {
+      player.superTimer -= dt;
+      if (player.superTimer <= 0) {
+        endSuperMode();
+      }
+    }
+
+    const isSuper = (player.superTimer > 0);
+    const isMorphing = (!isSuper && player.morphTimer < 1);
+    if (isMorphing) player.morphTimer = Math.min(1, player.morphTimer + dt / player.morphDur);
+
+    if (!isSuper && justPressed['KeyT'] && !isMorphing) {
+      player.fromMode = player.mode; player.mode = (player.mode + 1) % 3; player.morphTimer = 0;
+      player.guarding = false; player.gatlingSpin = 0;
+      if (player.mode === 2) player.grounded = false;
+      updateHelpRow(); sfx.transform();
+    }
+
+    if (justPressed['KeyV']) { camState.mode = camState.mode === 'CHASE' ? 'TOP' : 'CHASE'; el('hud-cam').textContent = camState.mode; }
+
+    player.invulnTimer = Math.max(0, player.invulnTimer - dt);
+    player.fireCd = Math.max(0, player.fireCd - dt);
+    player.bombCd = Math.max(0, player.bombCd - dt);
+    player.missileCd = Math.max(0, player.missileCd - dt);
+    player.defCd = Math.max(0, player.defCd - dt);
+    player.rollTimer = Math.max(0, player.rollTimer - dt);
+    player.dodgeTimer = Math.max(0, player.dodgeTimer - dt);
+    player.laserRecoil = Math.max(0, player.laserRecoil - dt * 3.5);
+    player.meleeTimer = Math.max(0, player.meleeTimer - dt);
+    player.squat = Math.max(0, player.squat - dt * ANIM_CONFIG.jumpSquatDecay);
+    player.trailCd = Math.max(0, player.trailCd - dt);
+
+    const heatCoolRate = player.overheated ? 26 : 22;
+    player.laserHeat = Math.max(0, player.laserHeat - dt * heatCoolRate);
+    if (player.overheated && player.laserHeat <= 10) player.overheated = false;
+
+    const turnIn = (keys['ArrowLeft'] || keys['KeyA'] ? 1 : 0) - (keys['ArrowRight'] || keys['KeyD'] ? 1 : 0);
+    const vertIn = (keys['ArrowUp'] ? 1 : 0) - (keys['ArrowDown'] ? 1 : 0);
+    const spaceHeld = !!keys['Space'];
+
+    let targetFwdSpeed = 0, robotThrusting = false;
+    player.boosting = false;
+    const surface = getSurfaceInfo(player.pos.x, player.pos.z);
+    player.surfaceType = surface.type;
+
+    if (isSuper) {
+      // 超合体スーパーロボの爽快ホバー＆高速移動
+      player.yaw = wrapAngle(player.yaw + turnIn * 2.4 * dt);
+      player.aimPitch = clamp(player.aimPitch + vertIn * 1.2 * dt, -0.6, 0.85);
+      const fwdX = Math.sin(player.yaw), fwdZ = Math.cos(player.yaw);
+      targetFwdSpeed = spaceHeld ? 46 : 0;
+      player.forwardSpeed = lerp(player.forwardSpeed, targetFwdSpeed, dt * 6.5);
+      player.pos.x += fwdX * player.forwardSpeed * dt;
+      player.pos.z += fwdZ * player.forwardSpeed * dt;
+      player.pos.y = lerp(player.pos.y, Math.max(surface.y + 4.5, 16), dt * 3.0);
+      player.pitch = lerp(player.pitch, spaceHeld ? -0.14 : 0, dt * 6);
+      player.roll = lerp(player.roll, -turnIn * 0.18, dt * 6);
+
+      // 衝撃波バリア (R)
+      if (justPressed['KeyR'] && player.defCd <= 0) {
+        player.defCd = 2.0;
+        spawnParticles(player.pos, 0xfde047, 24, 34, 0.45, 1.5, 0);
+        sfx.transform();
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+          if (projectiles[i].owner === 'enemy' && projectiles[i].pos.distanceTo(player.pos) < 35) {
+            scene.remove(projectiles[i].mesh); projectiles.splice(i, 1);
+          }
+        }
+      }
+    } else if (player.mode === 0) {
+      player.grounded = false;
+      player.boosting = spaceHeld && !isMorphing;
+      targetFwdSpeed = isMorphing ? 18 : (player.boosting ? 76 * ft.speedMul : 44 * ft.speedMul);
+      player.forwardSpeed = lerp(player.forwardSpeed, targetFwdSpeed, dt * 3.8);
+      player.yaw = wrapAngle(player.yaw + turnIn * 1.45 * ft.turnMul * dt);
+      player.pitch = lerp(player.pitch, vertIn * 0.42, dt * 4.5);
+      player.roll = lerp(player.roll, -turnIn * 0.85, dt * 5.0);
+      player.aimPitch = lerp(player.aimPitch, 0, dt * 6);
+      const fwd = new THREE.Vector3(Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), Math.cos(player.yaw) * Math.cos(player.pitch));
+      player.vel.copy(fwd).multiplyScalar(player.forwardSpeed);
+      player.pos.addScaledVector(player.vel, dt);
+      player.pos.y = Math.max(player.pos.y, surface.y + 3.2);
+    } else if (player.mode === 1) {
+      player.grounded = false;
+      targetFwdSpeed = (!isMorphing && spaceHeld) ? 32 * ft.speedMul : 0;
+      player.forwardSpeed = lerp(player.forwardSpeed, targetFwdSpeed, dt * 6.0);
+      player.yaw = wrapAngle(player.yaw + turnIn * 2.65 * ft.turnMul * dt);
+      player.pitch = lerp(player.pitch, 0, dt * 6.0);
+      player.roll = lerp(player.roll, -turnIn * 0.25, dt * 6.0);
+      player.pos.y += vertIn * 24 * dt;
+      player.aimPitch = lerp(player.aimPitch, 0, dt * 6);
+      player.vel.set(Math.sin(player.yaw) * player.forwardSpeed, 0, Math.cos(player.yaw) * player.forwardSpeed);
+      player.pos.addScaledVector(player.vel, dt);
+      player.pos.y = Math.max(player.pos.y, surface.y + 3.0);
+    } else {
+      player.yaw = wrapAngle(player.yaw + turnIn * 2.35 * ft.turnMul * dt);
+      player.aimPitch = clamp(player.aimPitch + vertIn * 1.25 * dt, -0.55, 0.85);
+      const fwdX = Math.sin(player.yaw), fwdZ = Math.cos(player.yaw);
+      robotThrusting = (!isMorphing && spaceHeld && !player.guarding);
+      if (robotThrusting) {
+        const accel = player.grounded ? 62 : 28;
+        player.vel.x += fwdX * accel * dt; player.vel.z += fwdZ * accel * dt;
+        const maxSpd = 30 * ft.speedMul, hSpd = Math.hypot(player.vel.x, player.vel.z);
+        if (hSpd > maxSpd) { player.vel.x = (player.vel.x / hSpd) * maxSpd; player.vel.z = (player.vel.z / hSpd) * maxSpd; }
+      } else {
+        const drag = player.grounded ? 6.5 : 0.45;
+        player.vel.x = lerp(player.vel.x, 0, Math.min(1, drag * dt));
+        player.vel.z = lerp(player.vel.z, 0, Math.min(1, drag * dt));
+      }
+      player.vel.y -= ANIM_CONFIG.robotGravity * dt;
+      if (!isMorphing && justPressed['KeyC'] && player.defCd <= 0) {
+        player.defCd = 1.15; player.squat = 0.85; player.grounded = false;
+        player.vel.x = -fwdX * 26; player.vel.z = -fwdZ * 26; player.vel.y = 22; sfx.transform();
+      }
+      player.pos.addScaledVector(player.vel, dt);
+      player.forwardSpeed = Math.hypot(player.vel.x, player.vel.z);
+      player.pitch = lerp(player.pitch, robotThrusting ? -ANIM_CONFIG.robotThrustLean : 0, dt * 8.0);
+      player.roll = lerp(player.roll, -turnIn * 0.12, dt * 8.0);
+
+      const updatedSurf = getSurfaceInfo(player.pos.x, player.pos.z);
+      player.surfaceType = updatedSurf.type;
+      const floorY = updatedSurf.y + ANIM_CONFIG.robotFootOffset;
+      if (player.pos.y <= floorY) {
+        const impactVy = -player.vel.y;
+        player.pos.y = floorY; player.vel.y = 0;
+        if (!player.grounded && impactVy > 7.5) {
+          player.squat = clamp(impactVy / 28, 0.45, 1.0);
+          const contactPos = new THREE.Vector3(player.pos.x, updatedSurf.y, player.pos.z);
+          if (updatedSurf.type === 'ground') {
+            cameraShake = Math.max(cameraShake, clamp(impactVy * ANIM_CONFIG.landShakeFactor, 0.35, 1.15));
+            spawnSplashRing(contactPos, false); sfx.landGround();
+          } else {
+            cameraShake = Math.max(cameraShake, clamp(impactVy * 0.015, 0.18, 0.5));
+            spawnSplashRing(contactPos, true); sfx.landWater();
+          }
+        }
+        player.grounded = true;
+      } else { player.grounded = false; }
+
+      if (player.grounded && player.forwardSpeed > 12 && player.trailCd <= 0) {
+        player.trailCd = 0.065;
+        spawnParticles(new THREE.Vector3(player.pos.x, updatedSurf.y + 0.3, player.pos.z), updatedSurf.type === 'water' ? 0xe0f2fe : 0xd6d3d1, 2, 7, 0.35, 0.75, 16);
+      }
+    }
+
+    if (player.dodgeTimer > 0) player.pos.addScaledVector(player.dodgeDir, 56 * dt);
+
+    player.guarding = false;
+    if (!isSuper && !isMorphing) {
+      if (player.mode === 0 && justPressed['KeyR'] && player.defCd <= 0) { player.rollTimer = 0.55; player.defCd = 1.6; player.rollDir = turnIn >= 0 ? 1 : -1; sfx.transform(); }
+      else if (player.mode === 1 && justPressed['KeyR'] && player.defCd <= 0) { player.dodgeTimer = 0.28; player.defCd = 1.25; const side = turnIn !== 0 ? turnIn : 1; player.dodgeDir.set(Math.cos(player.yaw) * side, 0, -Math.sin(player.yaw) * side); sfx.transform(); }
+      else if (player.mode === 2 && keys['KeyR']) player.guarding = true;
+    }
+    shieldBubble.visible = player.guarding;
+
+    player.pos.y = Math.min(player.pos.y, 95);
+    player.pos.x = clamp(player.pos.x, -520, 520);
+    player.pos.z = clamp(player.pos.z, -520, 520);
+
+    // --- 武装 ---
+    laserBeamMesh.visible = false;
+    superBeamMesh.visible = false;
+    let gatlingFiring = false;
+    const aimDir = new THREE.Vector3(
+      Math.sin(player.yaw) * Math.cos(player.aimPitch + (player.mode === 0 && !isSuper ? player.pitch : 0)),
+      Math.sin(player.aimPitch + (player.mode === 0 && !isSuper ? player.pitch : 0)),
+      Math.cos(player.yaw) * Math.cos(player.aimPitch + (player.mode === 0 && !isSuper ? player.pitch : 0))
+    ).normalize();
+    const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+
+    if (isSuper) {
+      // スーパーロボ武装
+      if (keys['KeyZ']) {
+        const gunOrigin = player.pos.clone().addScaledVector(right, -2.0).add(new THREE.Vector3(0, 1.1, 0)).addScaledVector(aimDir, 4.2);
+        superBeamMesh.visible = true;
+        superBeamMesh.position.copy(gunOrigin).addScaledVector(aimDir, 75);
+        superBeamMesh.lookAt(gunOrigin.clone().addScaledVector(aimDir, 150));
+        if (player.fireCd <= 0) {
+          player.fireCd = 0.11; sfx.superBeam();
+          for (const e of [...enemies]) {
+            const toE = e.pos.clone().sub(gunOrigin), proj = toE.dot(aimDir);
+            if (proj > 0 && proj < 155 && (toE.lengthSq() - proj * proj) < 7.0 * 7.0) damageEnemy(e, 28);
+          }
+          if (boss) {
+            boss.coreMesh.getWorldPosition(boss.coreWorldPos);
+            const toC = boss.coreWorldPos.clone().sub(gunOrigin), projC = toC.dot(aimDir);
+            if (projC > 0 && projC < 160 && (toC.lengthSq() - projC * projC) < 10.5 * 10.5) damageBoss(26, true);
+            else {
+              const toB = boss.pos.clone().add(new THREE.Vector3(0, 8, 0)).sub(gunOrigin), projB = toB.dot(aimDir);
+              if (projB > 0 && projB < 160 && (toB.lengthSq() - projB * projB) < 22 * 22) damageBoss(22, false);
+            }
+          }
+        }
+      }
+      if (justPressed['KeyX'] && player.bombCd <= 0) {
+        player.bombCd = 0.7; player.meleeTimer = 0.28;
+        const fwdFlat = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+        player.pos.addScaledVector(fwdFlat, 9.0);
+        sfx.melee(); cameraShake = 0.55;
+        const hitCenter = player.pos.clone().addScaledVector(fwdFlat, 10.0);
+        for (const e of [...enemies]) if (e.pos.distanceTo(hitCenter) < 20.0) damageEnemy(e, 110);
+        if (boss) {
+          boss.coreMesh.getWorldPosition(boss.coreWorldPos);
+          if (boss.coreWorldPos.distanceTo(hitCenter) < 24.0) damageBoss(95, true);
+          else if (boss.pos.distanceTo(hitCenter) < 48.0) damageBoss(65, false);
+        }
+      }
+      if (justPressed['KeyF'] && player.missileCd <= 0) {
+        player.missileCd = 6.0;
+        fireMissilesVolley(8);
+      }
+    } else if (!isMorphing && !player.guarding) {
+      if (keys['KeyZ']) {
+        if (player.mode === 0 && player.fireCd <= 0) {
+          player.fireCd = 0.16;
+          const dir = findAutoAimVector(player.pos, aimDir, 0.22);
+          spawnProjectile(player.pos.clone().addScaledVector(right, 1.3), dir, 165, 14 * ft.dmgMul, 'player', 0x38bdf8, [0.35, 0.35, 2.8], 1.5);
+          spawnProjectile(player.pos.clone().addScaledVector(right, -1.3), dir, 165, 14 * ft.dmgMul, 'player', 0x38bdf8, [0.35, 0.35, 2.8], 1.5);
+          sfx.shoot();
+        } else if (player.mode === 1) {
+          gatlingFiring = true; player.gatlingSpin = Math.min(1, player.gatlingSpin + dt * 1.4);
+          if (player.fireCd <= 0) {
+            player.fireCd = lerp(0.14, 0.045, player.gatlingSpin);
+            const spread = 0.045 * (0.4 + player.gatlingSpin * 0.6);
+            const dir = findAutoAimVector(player.pos, aimDir, 0.20);
+            dir.x += (Math.random() - 0.5) * spread; dir.y += (Math.random() - 0.5) * spread; dir.z += (Math.random() - 0.5) * spread; dir.normalize();
+            spawnProjectile(player.pos.clone().addScaledVector(right, -0.95).addScaledVector(aimDir, 1.8), dir, 155, 8.5 * ft.dmgMul, 'player', 0xfacc15, [0.28, 0.28, 2.2], 1.35);
+            sfx.gatling();
+          }
+        } else if (player.mode === 2 && !player.overheated) {
+          player.laserHeat = Math.min(100, player.laserHeat + dt * 42 * ft.heatMul);
+          if (player.laserHeat >= 100) player.overheated = true;
+          player.laserRecoil = 1.0;
+          const gunOrigin = player.pos.clone().addScaledVector(right, -0.88).add(new THREE.Vector3(0, 0.62, 0)).addScaledVector(aimDir, 2.1);
+          laserBeamMesh.visible = true; laserBeamMesh.position.copy(gunOrigin).addScaledVector(aimDir, 55);
+          laserBeamMesh.lookAt(gunOrigin.clone().addScaledVector(aimDir, 100));
+          if (player.fireCd <= 0) {
+            player.fireCd = 0.1; sfx.laser();
+            for (const e of [...enemies]) {
+              const toE = e.pos.clone().sub(gunOrigin), proj = toE.dot(aimDir);
+              if (proj > 0 && proj < 120 && (toE.lengthSq() - proj * proj) < 4.5 * 4.5) damageEnemy(e, 15 * ft.dmgMul);
+            }
+            if (boss) {
+              boss.coreMesh.getWorldPosition(boss.coreWorldPos);
+              const toC = boss.coreWorldPos.clone().sub(gunOrigin), projC = toC.dot(aimDir);
+              if (projC > 0 && projC < 130 && (toC.lengthSq() - projC * projC) < 7.5 * 7.5) damageBoss(16 * ft.dmgMul, true);
+              else {
+                const toB = boss.pos.clone().add(new THREE.Vector3(0, 8, 0)).sub(gunOrigin), projB = toB.dot(aimDir);
+                if (projB > 0 && projB < 130 && (toB.lengthSq() - projB * projB) < 20 * 20) damageBoss(12 * ft.dmgMul, false);
+              }
+            }
+          }
+        }
+      } else { player.gatlingSpin = Math.max(0, player.gatlingSpin - dt * 2.5); }
+
+      if (justPressed['KeyX']) {
+        if (player.mode !== 2 && player.bombCd <= 0) {
+          player.bombCd = 0.9;
+          const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+          const bDir = fwd.clone().multiplyScalar(0.85).add(new THREE.Vector3(0, -0.35, 0)).normalize();
+          spawnProjectile(player.pos.clone().add(new THREE.Vector3(0, -1.2, 0)), bDir, 52, 48 * ft.dmgMul, 'player', 0xf97316, [1.0, 1.0, 1.5], 3.0, true);
+          sfx.shoot();
+        } else if (player.mode === 2 && player.bombCd <= 0) {
+          player.bombCd = 0.75; player.meleeTimer = 0.24;
+          const fwdFlat = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+          player.vel.x = fwdFlat.x * 38; player.vel.z = fwdFlat.z * 38; sfx.melee();
+          const hitCenter = player.pos.clone().addScaledVector(fwdFlat, 6.5);
+          for (const e of [...enemies]) if (e.pos.distanceTo(hitCenter) < 11.5) damageEnemy(e, 55 * ft.dmgMul);
+          if (boss) {
+            boss.coreMesh.getWorldPosition(boss.coreWorldPos);
+            if (boss.coreWorldPos.distanceTo(hitCenter) < 15.0) { damageBoss(52 * ft.dmgMul, true); cameraShake = 0.6; }
+            else if (boss.pos.distanceTo(hitCenter) < 42.0) damageBoss(36 * ft.dmgMul, false);
+          }
+        }
+      }
+
+      if (justPressed['KeyF'] && player.missileCd <= 0 && player.missileLockDelay <= 0) {
+        player.missileLockDelay = 0.28;
+        player.lockedTargets = getAllTargets().map(t => ({ ...t, d: t.pos.distanceTo(player.pos) })).filter(t => t.d < 340).sort((a, b) => a.d - b.d).slice(0, 4);
+        sfx.alert();
+      }
+    }
+
+    if (player.missileLockDelay > 0) {
+      player.missileLockDelay -= dt;
+      if (player.missileLockDelay <= 0) { player.missileCd = 12.0; player.lockedTargets = []; fireMissilesVolley(4); }
+    }
+
+    meleeSlashMesh.visible = !isSuper && player.meleeTimer > 0;
+    if (meleeSlashMesh.visible) { meleeSlashMesh.position.set(0, 0.3, 3.8); meleeSlashMesh.rotation.y = (0.24 - player.meleeTimer) * 8; }
+
+    superSlashMesh.visible = isSuper && player.meleeTimer > 0;
+    if (superSlashMesh.visible) { superSlashMesh.position.set(0, 1.2, 7.5); superSlashMesh.rotation.y = (0.28 - player.meleeTimer) * 9; }
+
+    const hoverAmp = (player.mode === 2 && player.grounded && !isSuper) ? 0.0 : ANIM_CONFIG.hoverBobAmp;
+    const bob = Math.sin(globalTime * ANIM_CONFIG.hoverBobSpeed) * hoverAmp;
+    const idleRoll = Math.sin(globalTime * ANIM_CONFIG.idleRollSpeed) * (player.mode === 2 && player.grounded ? 0.008 : ANIM_CONFIG.idleRollAmp);
+    const idlePitch = Math.cos(globalTime * ANIM_CONFIG.idlePitchSpeed) * (player.mode === 2 && player.grounded ? 0.008 : ANIM_CONFIG.idlePitchAmp);
+
+    if (isSuper) {
+      superModel.group.position.set(player.pos.x, player.pos.y + bob * 1.5, player.pos.z);
+      superModel.group.rotation.order = 'YXZ';
+      superModel.group.rotation.set(-player.pitch + idlePitch, player.yaw, player.roll + idleRoll);
+      superModel.group.visible = (player.invulnTimer <= 0 || Math.floor(globalTime * 18) % 2 === 0);
+      for (const p of superModel.parts) {
+        if (p.part === 'thruster') {
+          const len = (spaceHeld ? 2.4 : 1.0) * (0.85 + 0.2 * Math.sin(globalTime * 35));
+          p.mesh.scale.z = p.baseScale.z * len;
+        } else if (p.part === 'armR' || p.part === 'gun') {
+          p.mesh.rotation.x = -player.aimPitch * 0.7;
+        }
+      }
+    } else {
+      playerRig.group.position.set(player.pos.x, player.pos.y + bob, player.pos.z);
+      const extraRoll = player.rollTimer > 0 ? (1 - player.rollTimer / 0.55) * Math.PI * 2 * player.rollDir : 0;
+      playerRig.group.rotation.order = 'YXZ';
+      playerRig.group.rotation.set(-player.pitch + idlePitch, player.yaw, player.roll + extraRoll + idleRoll);
+      playerRig.group.visible = (player.invulnTimer <= 0 || Math.floor(globalTime * 18) % 2 === 0);
+      playerRig.updateTransformVisual(player.fromMode, player.mode, player.morphTimer, {
+        time: globalTime, bankInput: turnIn, turnInput: turnIn, aimPitch: player.aimPitch,
+        boosting: player.boosting, thrusting: robotThrusting, grounded: player.grounded,
+        guarding: player.guarding, forwardSpeed: player.forwardSpeed,
+        moving: (player.forwardSpeed > 2.5), gatlingFiring, laserRecoil: player.laserRecoil, squat: player.squat
+      });
+    }
+  }
+
+  function updateWingmen(dt) {
+    if (player.superTimer > 0 || player.combiningTimer > 0) return;
+
+    const targets = getAllTargets();
+    for (const w of wingmen) {
+      w.modeCd -= dt;
+      if (w.modeCd <= 0 && w.morphTimer >= 1) {
+        w.modeCd = 5 + Math.random() * 5;
+        w.fromMode = w.mode; w.mode = (w.mode + 1) % 2; w.morphTimer = 0;
+      }
+      if (w.morphTimer < 1) w.morphTimer = Math.min(1, w.morphTimer + dt / 0.9);
+
+      // 目標がいれば一番近い敵、いなければ自機の斜め後方に編隊位置
+      let desiredPos, lookTarget = null;
+      if (targets.length > 0) {
+        const tgt = targets[w.side > 0 ? 0 : targets.length - 1];
+        lookTarget = tgt.pos;
+        const offset = new THREE.Vector3(w.side * 24, 6, -24);
+        desiredPos = tgt.pos.clone().add(offset);
+        if (desiredPos.distanceTo(player.pos) > 160) {
+          desiredPos = player.pos.clone().add(new THREE.Vector3(w.side * 16, 4, -14));
+        }
+      } else {
+        const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+        const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+        desiredPos = player.pos.clone().addScaledVector(right, w.side * 15).addScaledVector(fwd, -12).add(new THREE.Vector3(0, 3, 0));
+      }
+
+      const toDest = desiredPos.clone().sub(w.pos);
+      const dist = toDest.length();
+      const desiredYaw = lookTarget ? Math.atan2(lookTarget.x - w.pos.x, lookTarget.z - w.pos.z) : Math.atan2(toDest.x, toDest.z);
+      const diff = wrapAngle(desiredYaw - w.yaw);
+      w.yaw = wrapAngle(w.yaw + clamp(diff, -2.2 * dt, 2.2 * dt));
+      w.roll = lerp(w.roll, -clamp(diff, -1, 1) * 0.55, dt * 4);
+
+      if (dist > 6) {
+        const spd = Math.min(42 * w.type.speedMul, dist * 1.4);
+        w.pos.addScaledVector(toDest.normalize(), spd * dt);
+      }
+      w.pos.y = Math.max(w.pos.y, 10);
+
+      w.rig.group.rotation.order = 'YXZ';
+      w.rig.group.rotation.set(0, w.yaw, w.roll);
+      w.rig.updateTransformVisual(w.fromMode, w.mode, w.morphTimer, {
+        time: globalTime + w.side, bankInput: clamp(diff, -1, 1), boosting: dist > 20, grounded: false, forwardSpeed: 28, moving: true
+      });
+
+      // 援護射撃
+      w.fireCd -= dt;
+      if (w.fireCd <= 0 && lookTarget && lookTarget.distanceTo(w.pos) < 220) {
+        w.fireCd = 0.75 + Math.random() * 0.45;
+        const shotDir = lookTarget.clone().sub(w.pos).normalize();
+        spawnProjectile(w.pos.clone(), shotDir, 145, 7.5 * w.type.dmgMul, 'wingman', w.type.palette.glow, [0.3, 0.3, 2.2], 1.5);
+      }
+    }
+  }
+
+  function updateEnemies(dt) {
+    for (const e of enemies) {
+      e.modeSwitchCd -= dt;
+      if (e.modeSwitchCd <= 0 && e.morphTimer >= 1) {
+        e.modeSwitchCd = 5 + Math.random() * 5;
+        e.fromMode = e.mode; e.mode = (e.mode + 1 + Math.floor(Math.random() * 2)) % 3; e.morphTimer = 0;
+      }
+      if (e.morphTimer < 1) e.morphTimer = Math.min(1, e.morphTimer + dt / 0.9);
+
+      const toP = player.pos.clone().sub(e.pos);
+      const dist = toP.length();
+      let desiredYaw = Math.atan2(toP.x, toP.z);
+      if (dist < 42) desiredYaw += e.strafeSign * 1.15;
+      else if (dist < 90) desiredYaw += e.strafeSign * 0.45;
+
+      const diff = wrapAngle(desiredYaw - e.yaw);
+      const turnRate = e.mode === 0 ? 1.3 : 2.1;
+      e.yaw = wrapAngle(e.yaw + clamp(diff, -turnRate * dt, turnRate * dt));
+      e.roll = lerp(e.roll, -clamp(diff, -1, 1) * ANIM_CONFIG.enemyBankFactor, dt * 4);
+      e.pos.y = lerp(e.pos.y, clamp(player.pos.y + 8 + Math.sin(globalTime + e.strafeSign) * 6, 12, 75), dt * 1.4);
+
+      const moveSpd = e.mode === 0 ? e.speed : (e.mode === 1 ? e.speed * 0.65 : e.speed * 0.4);
+      e.pos.x += Math.sin(e.yaw) * moveSpd * dt; e.pos.z += Math.cos(e.yaw) * moveSpd * dt;
+
+      e.rig.group.rotation.order = 'YXZ';
+      e.rig.group.rotation.set(0, e.yaw, e.roll);
+      e.rig.updateTransformVisual(e.fromMode, e.mode, e.morphTimer, { time: globalTime, bankInput: clamp(diff, -1, 1), boosting: e.mode === 0, grounded: false, forwardSpeed: moveSpd, moving: true });
+
+      e.fireCd -= dt;
+      if (e.fireCd <= 0 && dist < 240) {
+        e.fireCd = (e.mode === 1 ? 1.0 : 1.55) + Math.random() * 0.7;
+        spawnProjectile(e.pos.clone(), toP.normalize(), 76, 8, 'enemy', 0xf43f5e, [0.55, 0.55, 1.8], 3.2);
+      }
+    }
+  }
+
+  function updateBoss(dt) {
+    if (!boss) return;
+    boss.yaw = wrapAngle(boss.yaw + 0.065 * dt);
+    boss.pos.x += Math.sin(boss.yaw) * boss.speed * dt; boss.pos.z += Math.cos(boss.yaw) * boss.speed * dt;
+    if (boss.pos.length() > 260) {
+      const backAng = Math.atan2(-boss.pos.x, -boss.pos.z);
+      boss.yaw = wrapAngle(boss.yaw + clamp(wrapAngle(backAng - boss.yaw), -0.35 * dt, 0.35 * dt));
+    }
+    const waveBob = Math.sin(globalTime * ANIM_CONFIG.shipBobSpeed) * ANIM_CONFIG.shipBobAmp;
+    boss.group.position.set(boss.pos.x, waveBob, boss.pos.z);
+    boss.group.rotation.set(Math.sin(globalTime * 0.7) * 0.015, boss.yaw, Math.cos(globalTime * 0.8) * 0.02);
+
+    boss.coreMesh.material = getMat(0xf43f5e, 0xf43f5e, 0.75 + 0.35 * Math.sin(globalTime * 6.0));
+    boss.coreMesh.getWorldPosition(boss.coreWorldPos);
+
+    const wp = new THREE.Vector3();
+    for (const t of boss.turrets) {
+      t.group.getWorldPosition(wp);
+      const toP = player.pos.clone().sub(wp);
+      const worldTargetYaw = Math.atan2(toP.x, toP.z) - boss.yaw;
+      t.yaw = wrapAngle(t.yaw + clamp(wrapAngle(worldTargetYaw - t.yaw), -1.6 * dt, 1.6 * dt));
+      t.group.rotation.y = t.yaw;
+      t.fireCd -= dt;
+      if (t.fireCd <= 0 && toP.length() < 360) {
+        t.fireCd = 2.0 + Math.random() * 1.1;
+        spawnProjectile(wp.clone().add(new THREE.Vector3(0, 1.5, 0)), toP.normalize(), 68, 10, 'enemy', 0xfb7185, [0.85, 0.85, 2.0], 4.5);
+      }
+    }
+  }
+
+  function updateProjectilesAndMissiles(dt) {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i]; p.life -= dt;
+      if (p.isBomb) p.vel.y -= 28 * dt;
+      p.pos.addScaledVector(p.vel, dt);
+      let remove = p.life <= 0;
+      if (p.pos.y <= 0.2) {
+        if (p.isBomb) { spawnParticles(new THREE.Vector3(p.pos.x, 0.5, p.pos.z), 0xe0f2fe, 12, 22, 0.65, 1.4); sfx.explosion(); }
+        remove = true;
+      }
+      if (!remove && (p.owner === 'player' || p.owner === 'wingman')) {
+        const fromP = (p.owner === 'player');
+        for (const e of [...enemies]) {
+          if (p.pos.distanceTo(e.pos) < (p.isBomb ? 9.0 : p.radius + 2.4)) {
+            damageEnemy(e, p.dmg, fromP);
+            if (p.isBomb) { spawnParticles(p.pos, 0xf97316, 16, 22, 0.55, 1.2); sfx.explosion(); }
+            remove = true; break;
+          }
+        }
+        if (!remove && boss) {
+          if (p.pos.distanceTo(boss.coreWorldPos) < (p.isBomb ? 11.5 : p.radius + 5.8)) {
+            damageBoss(p.dmg, true, fromP);
+            if (p.isBomb) { spawnParticles(p.pos, 0x38bdf8, 16, 22, 0.55, 1.2); sfx.explosion(); }
+            remove = true;
+          } else {
+            const rel = p.pos.clone().sub(boss.pos).applyAxisAngle(new THREE.Vector3(0, 1, 0), -boss.yaw);
+            if (Math.abs(rel.x) < 16 && rel.y > 0 && rel.y < 24 && Math.abs(rel.z) < 46) {
+              damageBoss(p.dmg, false, fromP);
+              spawnParticles(p.pos, 0xfacc15, 4, 10, 0.22, 0.5); remove = true;
+            }
+          }
+        }
+      } else if (!remove && p.owner === 'enemy') {
+        if (p.pos.distanceTo(player.pos) < p.radius + (player.superTimer > 0 ? 3.5 : 1.9)) {
+          damagePlayer(p.dmg, p.pos); remove = true;
+        }
+      }
+      if (remove) { scene.remove(p.mesh); projectiles.splice(i, 1); }
+    }
+
+    for (let i = missiles.length - 1; i >= 0; i--) {
+      const m = missiles[i]; m.life -= dt; m.trailTimer -= dt;
+      if (m.trailTimer <= 0) { m.trailTimer = 0.035; spawnTrail(m.pos, 0xf8fafc, 0.72); }
+      let tgtPos = null;
+      if (m.targetRef) {
+        if (m.targetRef.type === 'enemy' && enemies.includes(m.targetRef.obj)) tgtPos = m.targetRef.obj.pos;
+        else if (m.targetRef.type === 'bossCore' && boss) tgtPos = boss.coreWorldPos;
+      }
+      if (tgtPos) m.vel.lerp(tgtPos.clone().sub(m.pos).normalize().multiplyScalar(88), dt * 4.8);
+      m.pos.addScaledVector(m.vel, dt); m.mesh.lookAt(m.pos.clone().add(m.vel));
+
+      let hit = m.life <= 0 || m.pos.y <= 0.2;
+      if (!hit) {
+        for (const e of [...enemies]) {
+          if (m.pos.distanceTo(e.pos) < 5.5) {
+            damageEnemy(e, 46 * FIGHTER_TYPES[selectedFighterIdx].dmgMul, true);
+            spawnParticles(m.pos, 0xf97316, 14, 22, 0.5, 1.1); sfx.explosion(); hit = true; break;
+          }
+        }
+      }
+      if (!hit && boss) {
+        if (m.pos.distanceTo(boss.coreWorldPos) < 9.5) {
+          damageBoss(45 * FIGHTER_TYPES[selectedFighterIdx].dmgMul, true, true);
+          spawnParticles(m.pos, 0x38bdf8, 14, 22, 0.5, 1.1); sfx.explosion(); hit = true;
+        } else if (m.pos.distanceTo(boss.pos) < 28 && m.pos.y < 20) {
+          damageBoss(30 * FIGHTER_TYPES[selectedFighterIdx].dmgMul, false, true);
+          spawnParticles(m.pos, 0xf97316, 10, 18, 0.4, 0.9); sfx.explosion(); hit = true;
+        }
+      }
+      if (hit) { scene.remove(m.mesh); missiles.splice(i, 1); }
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const pt = particles[i]; pt.life -= dt; pt.vel.y -= pt.gravity * dt;
+      pt.mesh.position.addScaledVector(pt.vel, dt); pt.mesh.scale.multiplyScalar(0.96);
+      if (pt.life <= 0) { scene.remove(pt.mesh); particles.splice(i, 1); }
+    }
+  }
+
+  // =========================================================================
+  // 11. カメラ・2Dオーバーレイ・HUD
+  // =========================================================================
+  function updateCamera(dt) {
+    let desiredPos, desiredLook, desiredFov = 62;
+    if (gameState === GAME_STATES.TITLE || gameState === GAME_STATES.RESULT) {
+      const a = globalTime * 0.35;
+      desiredPos = new THREE.Vector3(player.pos.x + Math.cos(a) * 16, player.pos.y + 6, player.pos.z + Math.sin(a) * 16);
+      desiredLook = player.pos.clone().add(new THREE.Vector3(0, -1.5, 0));
+    } else if (camState.mode === 'TOP') {
+      const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      const height = player.superTimer > 0 ? 120 : (player.mode === 0 ? 115 : (player.mode === 1 ? 92 : 76));
+      desiredPos = player.pos.clone().add(new THREE.Vector3(0, height, -24)).addScaledVector(fwd, 16);
+      desiredLook = player.pos.clone().addScaledVector(fwd, 22); desiredFov = 58;
+    } else {
+      const isSuper = (player.superTimer > 0);
+      const dist = isSuper ? 24 : (player.mode === 0 ? 22 : (player.mode === 1 ? 16.5 : 12.5));
+      const height = isSuper ? 9.5 : (player.mode === 0 ? 6.8 : (player.mode === 1 ? 5.6 : 4.2));
+      const fwd = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      desiredPos = player.pos.clone().addScaledVector(fwd, -(dist + (player.boosting ? 4.5 : 0))).add(new THREE.Vector3(0, height, 0));
+      desiredPos.y = Math.max(desiredPos.y, 2.2);
+      desiredLook = player.pos.clone().addScaledVector(fwd, player.mode === 0 && !isSuper ? 26 : 18).add(new THREE.Vector3(0, player.aimPitch * 16 + 1.5, 0));
+      desiredFov = player.boosting ? 71 : (isSuper ? 68 : (player.mode === 2 ? 58 : 62));
+    }
+
+    const smoothRate = 1 - Math.exp(-5.2 * dt);
+    camState.pos.lerp(desiredPos, smoothRate); camState.lookAt.lerp(desiredLook, 1 - Math.exp(-7.5 * dt));
+    camState.fov = lerp(camState.fov, desiredFov, smoothRate);
+    camera.fov = camState.fov; camera.updateProjectionMatrix();
+    camera.position.copy(camState.pos);
+    if (cameraShake > 0.01) {
+      camera.position.x += (Math.random() - 0.5) * cameraShake * 2.2;
+      camera.position.y += (Math.random() - 0.5) * cameraShake * 2.2;
+      cameraShake = Math.max(0, cameraShake - dt * 2.8);
+    }
+    camera.lookAt(camState.lookAt);
+  }
+
+  const overlay = el('overlay-2d'), ctx2d = overlay.getContext('2d');
+  function resizeAll() {
+    camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    overlay.width = window.innerWidth; overlay.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resizeAll); resizeAll();
+
+  function drawOverlay() {
+    ctx2d.clearRect(0, 0, overlay.width, overlay.height);
+    if (gameState === GAME_STATES.TITLE || gameState === GAME_STATES.BRIEFING || gameState === GAME_STATES.RESULT) return;
+    const w = overlay.width, h = overlay.height, camFwd = new THREE.Vector3();
+    camera.getWorldDirection(camFwd);
+
+    const aimDir = new THREE.Vector3(
+      Math.sin(player.yaw) * Math.cos(player.aimPitch + (player.mode === 0 && player.superTimer <= 0 ? player.pitch : 0)),
+      Math.sin(player.aimPitch + (player.mode === 0 && player.superTimer <= 0 ? player.pitch : 0)),
+      Math.cos(player.yaw) * Math.cos(player.aimPitch + (player.mode === 0 && player.superTimer <= 0 ? player.pitch : 0))
+    );
+    const aimPt = player.pos.clone().addScaledVector(aimDir, 45).project(camera);
+    if (aimPt.z < 1) {
+      const rx = (aimPt.x * 0.5 + 0.5) * w, ry = (-aimPt.y * 0.5 + 0.5) * h;
+      ctx2d.strokeStyle = player.superTimer > 0 ? 'rgba(253, 224, 71, 0.95)' : (player.mode === 2 ? 'rgba(125, 211, 252, 0.9)' : 'rgba(250, 204, 21, 0.75)');
+      ctx2d.lineWidth = 2; ctx2d.beginPath();
+      ctx2d.arc(rx, ry, player.superTimer > 0 ? 22 : (player.mode === 2 ? 18 : 13), 0, Math.PI * 2);
+      ctx2d.moveTo(rx - 24, ry); ctx2d.lineTo(rx - 8, ry); ctx2d.moveTo(rx + 8, ry); ctx2d.lineTo(rx + 24, ry);
+      ctx2d.moveTo(rx, ry - 24); ctx2d.lineTo(rx, ry - 8); ctx2d.moveTo(rx, ry + 8); ctx2d.lineTo(rx, ry + 24);
+      ctx2d.stroke();
+    }
+
+    for (const t of getAllTargets()) {
+      const toT = t.pos.clone().sub(camera.position), inFront = toT.dot(camFwd) > 0;
+      const p = t.pos.clone().project(camera);
+      let sx = (p.x * 0.5 + 0.5) * w, sy = (-p.y * 0.5 + 0.5) * h;
+      if (!inFront) { sx = w - sx; sy = h - sy; }
+      const margin = 46, onScreen = inFront && sx >= margin && sx <= w - margin && sy >= margin && sy <= h - margin;
+      const isBossCore = t.type === 'bossCore', isLocked = player.lockedTargets.some(lt => lt.obj === t.obj && lt.type === t.type);
+
+      if (onScreen) {
+        ctx2d.strokeStyle = isLocked ? '#fde047' : (isBossCore ? '#f43f5e' : '#ef4444');
+        ctx2d.lineWidth = isLocked ? 3 : 1.8; const boxS = isBossCore ? 22 : 14;
+        ctx2d.strokeRect(sx - boxS, sy - boxS, boxS * 2, boxS * 2);
+        if (isBossCore) { ctx2d.fillStyle = '#fecdd3'; ctx2d.font = 'bold 12px sans-serif'; ctx2d.textAlign = 'center'; ctx2d.fillText('CORE (弱点)', sx, sy - boxS - 6); }
+        if (isLocked) { ctx2d.fillStyle = '#fde047'; ctx2d.font = 'bold 11px sans-serif'; ctx2d.textAlign = 'center'; ctx2d.fillText('LOCK', sx, sy + boxS + 14); }
+      } else {
+        const cx = w / 2, cy = h / 2, ang = Math.atan2(sy - cy, sx - cx);
+        const edgeX = clamp(cx + Math.cos(ang) * (w / 2 - 36), 34, w - 34), edgeY = clamp(cy + Math.sin(ang) * (h / 2 - 42), 54, h - 54);
+        ctx2d.save(); ctx2d.translate(edgeX, edgeY); ctx2d.rotate(ang);
+        ctx2d.fillStyle = isBossCore ? '#fb7185' : '#f87171';
+        ctx2d.beginPath(); ctx2d.moveTo(14, 0); ctx2d.lineTo(-9, -8); ctx2d.lineTo(-9, 8); ctx2d.closePath(); ctx2d.fill(); ctx2d.restore();
+        if (isBossCore) { ctx2d.fillStyle = '#fecdd3'; ctx2d.font = 'bold 11px sans-serif'; ctx2d.textAlign = 'center'; ctx2d.fillText('大型艦', edgeX, edgeY + 20); }
+      }
+    }
+
+    const radR = 54, rcx = 72, rcy = h - 78;
+    ctx2d.fillStyle = 'rgba(8, 20, 38, 0.72)'; ctx2d.strokeStyle = 'rgba(125, 211, 252, 0.5)'; ctx2d.lineWidth = 1.5;
+    ctx2d.beginPath(); ctx2d.arc(rcx, rcy, radR, 0, Math.PI * 2); ctx2d.fill(); ctx2d.stroke();
+    ctx2d.fillStyle = '#38bdf8'; ctx2d.beginPath(); ctx2d.moveTo(rcx, rcy - 6); ctx2d.lineTo(rcx - 4, rcy + 5); ctx2d.lineTo(rcx + 4, rcy + 5); ctx2d.closePath(); ctx2d.fill();
+
+    const scaleR = radR / 320, cosY = Math.cos(player.yaw), sinY = Math.sin(player.yaw);
+    const plotPoint = (wx, wz, color, size) => {
+      const dx = wx - player.pos.x, dz = wz - player.pos.z;
+      const rx = (dx * -cosY + dz * sinY) * scaleR, ry = -(dx * sinY + dz * cosY) * scaleR;
+      const dist = Math.hypot(rx, ry), cs = dist > radR - 5 ? (radR - 5) / dist : 1;
+      ctx2d.fillStyle = color; ctx2d.fillRect(rcx + rx * cs - size / 2, rcy + ry * cs - size / 2, size, size);
+    };
+    for (const wUnit of wingmen) if (player.superTimer <= 0) plotPoint(wUnit.pos.x, wUnit.pos.z, '#4ade80', 4);
+    for (const e of enemies) plotPoint(e.pos.x, e.pos.z, '#ef4444', 5);
+    if (boss) plotPoint(boss.pos.x, boss.pos.z, '#fb7185', 9);
+  }
+
+  function updateHUD() {
+    const isSuper = (player.superTimer > 0);
+    const modeNames = ['戦闘機', '中間形態', 'ロボット'];
+    el('hud-mode').textContent = isSuper ? '超合体ロボ' : (modeNames[player.mode] + (player.morphTimer < 1 ? ' (変形中)' : ''));
+    el('hud-mode').style.background = isSuper ? '#d97706' : '#0284c7';
+
+    const hpPct = (player.hp / player.maxHp) * 100;
+    el('hp-fill').style.width = `${hpPct}%`;
+    el('hp-fill').style.background = hpPct > 35 ? 'linear-gradient(90deg, #22c55e, #4ade80)' : 'linear-gradient(90deg, #ef4444, #f97316)';
+    el('hud-hp-text').textContent = `${Math.ceil(player.hp)} / ${player.maxHp}`;
+
+    el('hud-wingmen').textContent = isSuper ? '★ 3機合体：アズール・カイザー稼働中' : `僚機: ${wingmen.map(w => w.type.name.split(' ')[1]).join('・')} 随伴中`;
+    const badge = [];
+    if (isSuper) badge.push('無双アーマー');
+    else {
+      if (player.guarding) badge.push('ガード中');
+      if (player.rollTimer > 0 || player.dodgeTimer > 0) badge.push('回避無敵');
+      if (player.mode === 2) badge.push(player.grounded ? (player.surfaceType === 'ground' ? '地上接地' : '水上滑走') : '落下中');
+    }
+    el('hud-state-badge').textContent = badge.join(' ');
+
+    const min = String(Math.floor(sessionTimeLeft / 60)).padStart(2, '0'), sec = String(Math.floor(sessionTimeLeft % 60)).padStart(2, '0');
+    el('hud-timer').textContent = `${min}:${sec}`; el('hud-timer').style.color = sessionTimeLeft <= 30 ? '#f87171' : '#e2f1ff';
+    el('hud-score').textContent = score.toLocaleString();
+
+    if (gameState === GAME_STATES.WAVE1) el('hud-wave-info').textContent = `WAVE 1 / 敵残数: ${enemies.length}`;
+    else if (gameState === GAME_STATES.WAVE2) el('hud-wave-info').textContent = `WAVE 2 / 敵残数: ${enemies.length}`;
+    else if (gameState === GAME_STATES.BOSS) el('hud-wave-info').textContent = `最終目標: 大型強襲艦`;
+    else el('hud-wave-info').textContent = `ウェーブ移行中`;
+
+    const mCd = el('hud-missile-cd');
+    if (player.missileCd <= 0) { mCd.textContent = 'READY'; mCd.className = 'ok-text'; }
+    else { mCd.textContent = `${player.missileCd.toFixed(1)}s`; mCd.className = 'warn-text'; }
+
+    const defLabels = ['バレルロール [R]', '横跳び回避 [R]', 'シールド [R長押]'];
+    el('hud-def-label').textContent = isSuper ? '衝撃波バリア [R]' : defLabels[player.mode];
+    const dCd = el('hud-def-cd');
+    if (!isSuper && player.mode === 2) { dCd.textContent = player.guarding ? 'ACTIVE' : 'READY'; dCd.className = 'ok-text'; }
+    else if (player.defCd <= 0) { dCd.textContent = 'READY'; dCd.className = 'ok-text'; }
+    else { dCd.textContent = `${player.defCd.toFixed(1)}s`; dCd.className = 'warn-text'; }
+
+    // 合体ゲージ表示
+    if (isSuper) {
+      el('hud-combine-label').textContent = '合体残り時間';
+      el('hud-combine-text').textContent = `${player.superTimer.toFixed(1)}s`;
+      el('hud-combine-text').className = 'ready-gold';
+      el('combine-fill').style.width = `${(player.superTimer / 20.0) * 100}%`;
+    } else {
+      el('hud-combine-label').textContent = '合体ゲージ';
+      el('combine-fill').style.width = `${player.combineGauge}%`;
+      if (player.combineGauge >= 100) {
+        el('hud-combine-text').textContent = '[G] 合体可能！';
+        el('hud-combine-text').className = 'ready-gold';
+      } else {
+        el('hud-combine-text').textContent = `${Math.floor(player.combineGauge)}%`;
+        el('hud-combine-text').className = '';
+      }
+    }
+
+    el('hud-heat-wrap').classList.toggle('hidden', isSuper || player.mode !== 2);
+    el('heat-fill').style.width = `${player.laserHeat}%`;
+    el('hud-heat-status').textContent = player.overheated ? 'OVERHEAT!' : `${Math.round(player.laserHeat)}%`;
+    el('hud-heat-status').style.color = player.overheated ? '#f87171' : '#bae6fd';
+
+    if (boss) {
+      const bPct = (boss.hp / boss.maxHp) * 100;
+      el('boss-hp-fill').style.width = `${bPct}%`;
+      el('boss-hp-text').textContent = `艦体/コア耐久: ${Math.ceil(bPct)}%`;
+    }
+  }
+
+  // =========================================================================
+  // 12. メインループ
+  // =========================================================================
+  let lastTime = performance.now();
+  function tick(now) {
+    requestAnimationFrame(tick);
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+
+    if (gameState === GAME_STATES.TITLE) {
+      globalTime += dt;
+      if (justPressed['ArrowLeft'] || justPressed['KeyA']) selectFighter(selectedFighterIdx - 1);
+      if (justPressed['ArrowRight'] || justPressed['KeyD']) selectFighter(selectedFighterIdx + 1);
+      if (justPressed['Digit1']) selectFighter(0);
+      if (justPressed['Digit2']) selectFighter(1);
+      if (justPressed['Digit3']) selectFighter(2);
+
+      playerRig.group.position.set(0, 24 + Math.sin(globalTime * 2) * 0.4, 0);
+      playerRig.group.rotation.set(0, globalTime * 0.55, 0.12);
+      const cycle = (globalTime * 0.35) % 3, mA = Math.floor(cycle), mB = (mA + 1) % 3, frac = clamp((cycle - mA - 0.65) / 0.35, 0, 1);
+      playerRig.updateTransformVisual(mA, mB, frac, { time: globalTime, boosting: true, grounded: false });
+
+      if (justPressed['Enter']) startBriefing();
+    } else if (gameState === GAME_STATES.BRIEFING) {
+      globalTime += dt; stateTimer -= dt;
+      if (justPressed['Enter'] || stateTimer <= 0) startWave1();
+    } else if (gameState === GAME_STATES.RESULT) {
+      globalTime += dt;
+      if (justPressed['Enter']) startBriefing();
+      else if (justPressed['KeyT']) { clearEntities(); rebuildPlayerRig(); resetPlayer(); gameState = GAME_STATES.TITLE; switchScreen('screen-title'); }
+    } else {
+      if (justPressed['KeyP']) { paused = !paused; el('screen-pause').classList.toggle('hidden', !paused); }
+      if (paused) {
+        if (justPressed['Enter']) {
+          paused = false; el('screen-pause').classList.add('hidden');
+          clearEntities(); rebuildPlayerRig(); resetPlayer(); el('hud').classList.add('hidden');
+          gameState = GAME_STATES.TITLE; switchScreen('screen-title');
+        }
+      } else {
+        globalTime += dt;
+        sessionTimeLeft = Math.max(0, sessionTimeLeft - dt);
+        if (sessionTimeLeft <= 0) finishSession(false, '時間切れ');
+        else {
+          if (radioTimeout > 0) { radioTimeout -= dt; if (radioTimeout <= 0) el('radio-box').classList.add('hidden'); }
+          updatePlayer(dt);
+          updateWingmen(dt);
+          updateEnemies(dt);
+          updateBoss(dt);
+          updateProjectilesAndMissiles(dt);
+          updateHUD();
+
+          if (gameState === GAME_STATES.WAVE1 && enemies.length === 0) enterWave2Transition();
+          else if (gameState === GAME_STATES.TRANSITION_W2) { stateTimer -= dt; if (stateTimer <= 0) startWave2(); }
+          else if (gameState === GAME_STATES.WAVE2 && enemies.length === 0) enterBossTransition();
+          else if (gameState === GAME_STATES.TRANSITION_BOSS) { stateTimer -= dt; if (stateTimer <= 0) startBossWave(); }
+        }
+      }
+    }
+
+    updateCamera(dt);
+    renderer.render(scene, camera);
+    drawOverlay();
+    for (const k in justPressed) delete justPressed[k];
+  }
+
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
